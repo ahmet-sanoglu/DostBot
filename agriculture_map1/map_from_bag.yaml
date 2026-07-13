@@ -1,0 +1,9 @@
+free_thresh: 0.01
+image: map_from_bag.pgm
+negate: 0
+occupied_thresh: 0.65
+origin:
+- -8.952507973864025
+- -21.995696463093207
+- 0.0
+resolution: 0.10000000149011612

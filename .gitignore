@@ -1,0 +1,12 @@
+venv/
+node_modules/
+.env
+__pycache__/
+*.pyc
+bekleyen_kuyruk.db
+*.zip
+bag_examples_for_ui/
+agriculture_map1/*.png
+agriculture_map1/*.pgm
+agriculture_map1/*.data
+agriculture_map1/*.posegraph
