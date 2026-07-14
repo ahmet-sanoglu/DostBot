@@ -1,10 +1,11 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import nipplejs from 'nipplejs';
 import { Topic } from 'roslib';
 import { useRos } from '../context/RosContext';
 import { useTelemetry } from '../context/TelemetryContext';
+import { CMD_VEL_JOY_TOPIC } from '../utils/rosTopics';
 
-const CMD_VEL_TOPIC = '/cmd_vel';
+const JOYSTICK_SIZE = 100;
 const MAX_LINEAR = 0.5;   // m/s
 const MAX_ANGULAR = 1.0;  // rad/s
 const PUBLISH_INTERVAL_MS = 100; // 10 Hz
@@ -33,11 +34,11 @@ const Joystick = () => {
   const zoneRef = useRef(null);
   const { ros } = useRos();
   const { setVelocity } = useTelemetry();
+  const [isActive, setIsActive] = useState(false);
+  const [displaySpeed, setDisplaySpeed] = useState({ linear: 0, angular: 0 });
 
-  // Güncel hız komutları — interval callback'i ref üzerinden okur
   const velocityRef = useRef({ linearX: 0, angularZ: 0 });
 
-  // ── nipplejs: ekranın alt-ortasında sabit dairesel joystick ──
   useEffect(() => {
     const zone = zoneRef.current;
     if (!zone) return;
@@ -46,36 +47,45 @@ const Joystick = () => {
       zone,
       mode: 'static',
       position: { left: '50%', top: '50%' },
-      color: 'rgba(6, 168, 155, 0.75)',
-      size: 90,
+      color: 'rgba(6, 168, 155, 0.15)',
+      size: JOYSTICK_SIZE,
       dynamicPage: true,
     });
 
+    const handleStart = () => {
+      setIsActive(true);
+    };
+
     const handleMove = (evt) => {
-      velocityRef.current = velocitiesFromJoystick(evt.data);
+      const { linearX, angularZ } = velocitiesFromJoystick(evt.data);
+      velocityRef.current = { linearX, angularZ };
+      setDisplaySpeed({ linear: linearX, angular: angularZ });
     };
 
     const handleEnd = () => {
-      // Joystick bırakılınca robotu durdur
       velocityRef.current = { linearX: 0, angularZ: 0 };
+      setIsActive(false);
+      setDisplaySpeed({ linear: 0, angular: 0 });
     };
 
+    manager.on('start', handleStart);
     manager.on('move', handleMove);
     manager.on('end', handleEnd);
 
     return () => {
       manager.destroy();
       velocityRef.current = { linearX: 0, angularZ: 0 };
+      setIsActive(false);
+      setDisplaySpeed({ linear: 0, angular: 0 });
     };
   }, []);
 
-  // ── /cmd_vel topic'ine 10 Hz geometry_msgs/Twist yayınla ──
   useEffect(() => {
     if (!ros) return;
 
     const cmdVelTopic = new Topic({
       ros,
-      name: CMD_VEL_TOPIC,
+      name: CMD_VEL_JOY_TOPIC,
       messageType: 'geometry_msgs/Twist',
     });
 
@@ -94,7 +104,6 @@ const Joystick = () => {
 
     return () => {
       clearInterval(intervalId);
-      // Bileşen kaldırılırken robotu durdur
       cmdVelTopic.publish({
         linear: { x: 0, y: 0, z: 0 },
         angular: { x: 0, y: 0, z: 0 },
@@ -104,7 +113,18 @@ const Joystick = () => {
   }, [ros, setVelocity]);
 
   return (
-    <div ref={zoneRef} className="joystick-zone" />
+    <div className="manual-drive-controls">
+      <div
+        ref={zoneRef}
+        className={`joystick-zone${isActive ? ' active' : ''}`}
+      />
+      <p className="manual-drive__hint">Sürükleyerek yönlendirin</p>
+      <p className="manual-drive__velocity" aria-live="polite">
+        {isActive
+          ? `${displaySpeed.linear.toFixed(2)} m/s · ${displaySpeed.angular.toFixed(2)} rad/s`
+          : 'Duruyor'}
+      </p>
+    </div>
   );
 };
 

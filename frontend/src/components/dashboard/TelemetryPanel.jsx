@@ -125,7 +125,7 @@ function CompassWidget({ yawRad }) {
   );
 }
 
-export default function TelemetryPanel() {
+export default function TelemetryPanel({ debugMode = false }) {
   const { pose, velocity } = useTelemetry();
   const yawRad = pose?.yaw ?? null;
   const [speedHistory, setSpeedHistory] = useState([]);
@@ -152,6 +152,11 @@ export default function TelemetryPanel() {
 
   return (
     <aside className="telemetry-panel" aria-label="Telemetri kartları">
+      {debugMode && (
+        <p className="telemetry-panel__debug-note">
+          Debug modu — ham telemetri kartları (?debug=1)
+        </p>
+      )}
       <div className="panel-card telemetry-card">
         <TelemetryCardTitle icon={<IconLocation />}>Konum</TelemetryCardTitle>
         <div className={`telemetry-card__primary ${pose ? '' : 'telemetry-card__primary--muted'}`}>

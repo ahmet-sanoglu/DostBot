@@ -1,10 +1,9 @@
 import React from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Topic } from 'roslib';
 import { useRos } from '../../context/RosContext';
-import logo from '../../assets/dost-tarim-logo.jpeg';
-
-const CMD_VEL_TOPIC = '/cmd_vel';
+import { CMD_VEL_JOY_TOPIC } from '../../utils/rosTopics';
+import logo from '../../assets/dost-tarim-logo.png';
 const DEMO_BATTERY_PERCENT = 87;
 
 function EmergencyStopButton() {
@@ -15,7 +14,7 @@ function EmergencyStopButton() {
 
     const cmdVelTopic = new Topic({
       ros,
-      name: CMD_VEL_TOPIC,
+      name: CMD_VEL_JOY_TOPIC,
       messageType: 'geometry_msgs/Twist',
     });
 
@@ -45,8 +44,12 @@ function TopBarBattery() {
 
 export default function TopBar() {
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const { status } = useRos();
   const isConnected = status === 'ROS bağlantısı kuruldu';
+  const pageTitle = pathname.startsWith('/muhendis')
+    ? 'Mühendis Paneli'
+    : 'Kontrol Paneli';
 
   return (
     <header className="top-bar">
@@ -58,10 +61,10 @@ export default function TopBar() {
           onClick={() => navigate('/')}
         />
         <div className="top-bar__brand-divider" aria-hidden="true" />
-        <span className="top-bar__brand-title">Kontrol paneli</span>
+        <span className="top-bar__brand-title">{pageTitle}</span>
       </div>
 
-      <div className="top-bar__actions">
+      <div className="top-bar__actions-card">
         <div className="top-bar__status">
           <span
             className={`status-dot ${isConnected ? 'status-dot--connected' : 'status-dot--disconnected'}`}

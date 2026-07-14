@@ -11,7 +11,9 @@ export default function DashboardLayout() {
 
         <div className="workspace">
           <TopBar />
-          <Outlet />
+          <div className="workspace__content">
+            <Outlet />
+          </div>
         </div>
       </div>
     </div>

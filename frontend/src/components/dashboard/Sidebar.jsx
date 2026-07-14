@@ -2,17 +2,14 @@ import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
 const SIDEBAR_ITEMS = [
-  { id: 'live', icon: '📡', label: 'Canlı İzleme', path: '/' },
-  { id: 'autonomous', icon: '🤖', label: 'Otonom Görevler', path: '/otonom' },
+  { id: 'control', icon: '🎛️', label: 'Kontrol Paneli', path: '/' },
   { id: 'history', icon: '📋', label: 'Görev Geçmişi', path: null },
   { id: 'settings', icon: '⚙️', label: 'Ayarlar', path: null },
+  { id: 'engineer', icon: '🛠️', label: 'Mühendis Paneli', path: '/muhendis', openInNewTab: true },
 ];
 
 function isItemActive(pathname, item) {
   if (!item.path) return false;
-  if (item.path === '/') {
-    return pathname === '/' || pathname === '/canli-izleme';
-  }
   return pathname === item.path;
 }
 
@@ -32,6 +29,7 @@ export default function Sidebar() {
               to={item.path}
               className={className}
               title={item.label}
+              {...(item.openInNewTab ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
             >
               <span className="sidebar-item__icon">{item.icon}</span>
               <span>{item.label}</span>

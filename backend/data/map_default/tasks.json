@@ -1,0 +1,35 @@
+[
+  {
+    "id": "task_1",
+    "name": "Test Noktasına Git",
+    "steps": [
+      {
+        "x": 0.16,
+        "y": 0.32,
+        "yaw": 0
+      }
+    ]
+  },
+  {
+    "id": "task_d3db0c55",
+    "name": "iceri",
+    "steps": [
+      {
+        "x": 7.8,
+        "y": -2.1,
+        "yaw": 0.0
+      }
+    ]
+  },
+  {
+    "id": "task_5e321c41",
+    "name": "disari",
+    "steps": [
+      {
+        "x": 7.0,
+        "y": -15.0,
+        "yaw": 0.0
+      }
+    ]
+  }
+]

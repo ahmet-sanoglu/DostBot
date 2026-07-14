@@ -1,0 +1,23 @@
+[
+  {
+    "id": "loc_1",
+    "name": "Test Noktası",
+    "x": 0.16,
+    "y": 0.32,
+    "yaw": 0
+  },
+  {
+    "id": "loc_a296a900",
+    "name": "Iceride Test",
+    "x": 7.8,
+    "y": -2.1,
+    "yaw": 0.0
+  },
+  {
+    "id": "loc_72435851",
+    "name": "Disari Test",
+    "x": 7.0,
+    "y": -15.0,
+    "yaw": 0.0
+  }
+]

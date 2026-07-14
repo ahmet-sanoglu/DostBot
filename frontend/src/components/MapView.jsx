@@ -3,13 +3,12 @@ import { Topic } from 'roslib';
 import { useRos } from '../context/RosContext';
 import { useTelemetry } from '../context/TelemetryContext';
 
-// Flask API uç noktaları
+import { FREE_SPACE_THRESHOLD, getOccupancyPixelRgba, isOccupancyPixelPassable } from '../utils/mapPassability';
 const MAP_METADATA_URL = 'http://localhost:5000/api/map/metadata';
 const MAP_IMAGE_URL = 'http://localhost:5000/api/map/image';
 const ODOMETRY_TOPIC = '/odometry/filtered_uwb';
 const TRAIL_MAX = 200;
 const TRAIL_MIN_DIST_M = 0.05;
-const FREE_SPACE_THRESHOLD = 250;
 const MAP_THEME = {
   free: { r: 0xf0, g: 0xfd, b: 0xf4, a: 255 },
   obstacle: { r: 0x33, g: 0x41, b: 0x55, a: 255 },
@@ -249,6 +248,83 @@ function worldToDisplayPixel(worldX, worldY, mapMeta, imageObj, imageData) {
 }
 
 /**
+ * Canvas tıklamasını önizleme için dünya koordinatına çevirir (snap yok).
+ * Geçilebilirlik ham occupancy piksel değerine göre belirlenir.
+ */
+function canvasToWorldPreview(
+  canvasX,
+  canvasY,
+  imageObj,
+  metadata,
+  imageData,
+  fitScale,
+  centerX,
+  centerY,
+  userScale,
+  offset,
+) {
+  const imageSize = getImageSize(imageObj);
+
+  const raw = canvasToImagePixel(
+    canvasX,
+    canvasY,
+    imageSize,
+    fitScale,
+    centerX,
+    centerY,
+    userScale,
+    offset,
+  );
+
+  const inBounds = isImagePixelInBounds(raw.x, raw.y, imageSize);
+  const pixelSample = imageData
+    ? getOccupancyPixelRgba(
+      imageData,
+      raw.x,
+      raw.y,
+      imageSize.width,
+      imageSize.height,
+    )
+    : null;
+
+  console.log('[map-click-debug]', {
+    canvasPixel: { x: canvasX, y: canvasY },
+    imagePixel: { x: raw.x, y: raw.y },
+    inBounds,
+    rgba: pixelSample
+      ? { r: pixelSample.r, g: pixelSample.g, b: pixelSample.b, a: pixelSample.a }
+      : null,
+    grayscale: pixelSample?.grayscale,
+    threshold: FREE_SPACE_THRESHOLD,
+    passableByThreshold: pixelSample
+      ? pixelSample.grayscale > FREE_SPACE_THRESHOLD
+      : false,
+    outOfBoundsSample: pixelSample?.outOfBounds ?? true,
+  });
+
+  if (!inBounds) {
+    return null;
+  }
+
+  const isPassable = imageData
+    ? isOccupancyPixelPassable(
+      imageData,
+      raw.x,
+      raw.y,
+      imageSize.width,
+      imageSize.height,
+    )
+    : false;
+
+  const world = imagePixelToWorld(raw.x, raw.y, metadata, imageSize);
+  return {
+    x: world.x,
+    y: world.y,
+    isPassable,
+  };
+}
+
+/**
  * Canvas tıklamasını harita sınırları + snap ile dünya koordinatına çevirir.
  * Sınır dışı tıklamalarda null döner.
  */
@@ -414,29 +490,57 @@ function drawRobotArrow(ctx, x, y, yaw, scale) {
   ctx.restore();
 }
 
-/** Otonom modda seçilen hedefi harita üzerinde işaretler. */
-function drawGoalMarker(ctx, x, y, scale) {
+/** Otonom modda seçilen/geçici hedefi harita üzerinde işaretler. */
+function drawGoalMarker(ctx, x, y, scale, isPassable = true) {
   const radius = 10 / scale;
+  const isValid = isPassable !== false;
 
   ctx.save();
-  ctx.shadowColor = 'rgba(6, 168, 155, 0.45)';
+  ctx.shadowColor = isValid ? 'rgba(249, 115, 22, 0.45)' : 'rgba(239, 68, 68, 0.45)';
   ctx.shadowBlur = 8 / scale;
 
   ctx.beginPath();
   ctx.arc(x, y, radius, 0, 2 * Math.PI);
-  ctx.fillStyle = 'rgba(6, 168, 155, 0.25)';
+  ctx.fillStyle = isValid ? 'rgba(249, 115, 22, 0.28)' : 'rgba(239, 68, 68, 0.28)';
   ctx.fill();
-  ctx.strokeStyle = '#06A89B';
+  ctx.strokeStyle = isValid ? '#f97316' : '#ef4444';
   ctx.lineWidth = 2 / scale;
   ctx.stroke();
 
   ctx.beginPath();
   ctx.moveTo(x, y);
   ctx.lineTo(x + radius * 1.4, y);
-  ctx.strokeStyle = 'rgba(6, 168, 155, 0.55)';
+  ctx.strokeStyle = isValid ? 'rgba(249, 115, 22, 0.65)' : 'rgba(239, 68, 68, 0.65)';
   ctx.lineWidth = 1.5 / scale;
   ctx.stroke();
 
+  ctx.restore();
+}
+
+/** /plan topic'inden gelen rotayı kesik turkuaz çizgi olarak çizer. */
+function drawPlanPath(ctx, planPath, mapMeta, imageObj, scale) {
+  if (!planPath?.length || !mapMeta || !imageObj) return;
+
+  const imageSize = getImageSize(imageObj);
+  const pixels = planPath.map(({ x, y }) =>
+    worldToPixel(x, y, mapMeta, imageSize),
+  );
+
+  ctx.save();
+  ctx.setLineDash([5, 5]);
+  ctx.strokeStyle = '#06A89B';
+  ctx.lineWidth = 2 / scale;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  pixels.forEach((point, index) => {
+    if (index === 0) {
+      ctx.moveTo(point.x, point.y);
+    } else {
+      ctx.lineTo(point.x, point.y);
+    }
+  });
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -461,11 +565,7 @@ function drawPositionTrail(ctx, trail, mapMeta, imageObj, imageData, scale) {
   }
 }
 
-const MapView = ({
-  enableClickToGo = false,
-  onMapGoalClick,
-  goalMarker = null,
-}) => {
+const MapView = () => {
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
 
@@ -481,7 +581,7 @@ const MapView = ({
   const mapImageDataRef = useRef(null);
   const smoothedPoseRef = useRef(null);
   const { setPose: setTelemetryPose } = useTelemetry();
-  const { ros, status: rosStatus } = useRos();
+  const { ros, status: rosStatus, planPath } = useRos();
 
   // Zoom ve pan durumu
   const [scale, setScale] = useState(1);
@@ -496,19 +596,8 @@ const MapView = ({
   const lastMousePos = useRef({ x: 0, y: 0 });
   const panStartPos = useRef({ x: 0, y: 0 });
   const didPanRef = useRef(false);
-  const interactionRef = useRef({});
   const layoutRef = useRef(null);
   const viewResetKeyRef = useRef('');
-
-  interactionRef.current = {
-    enableClickToGo,
-    clickEnabled: enableClickToGo,
-    mapMeta,
-    imageObj,
-    scale,
-    offset,
-    onMapGoalClick,
-  };
 
   // ── 1. Flask'tan harita metadata ve görüntüsünü çek ──
   useEffect(() => {
@@ -651,6 +740,10 @@ const MapView = ({
     ctx.rotate(-MAP_ROTATION);
     ctx.drawImage(themedImageObj, 0, 0);
 
+    if (mapMeta && planPath.length > 0) {
+      drawPlanPath(ctx, planPath, mapMeta, imageObj, totalScale);
+    }
+
     if (mapMeta && positionTrail.length > 0) {
       drawPositionTrail(
         ctx,
@@ -674,21 +767,20 @@ const MapView = ({
       drawRobotArrow(ctx, x, y, robotPose.yaw, totalScale);
     }
 
-    if (goalMarker && mapMeta) {
-      const { x, y } = worldToDisplayPixel(
-        goalMarker.x,
-        goalMarker.y,
-        mapMeta,
-        imageObj,
-        mapImageDataRef.current,
-      );
-      drawGoalMarker(ctx, x, y, totalScale);
-    }
-
     ctx.restore();
 
     ctx.restore();
-  }, [canvasSize, imageObj, themedImageObj, mapMeta, robotPose, positionTrail, scale, offset, goalMarker]);
+  }, [
+    canvasSize,
+    imageObj,
+    themedImageObj,
+    mapMeta,
+    robotPose,
+    positionTrail,
+    scale,
+    offset,
+    planPath,
+  ]);
 
   const scaleRef = useRef(scale);
   const offsetRef = useRef(offset);
@@ -717,44 +809,7 @@ const MapView = ({
   };
 
   // ── 3b. Sol tık basılı tutarak pan (kaydırma) + tıklama ──
-  const finishPointerInteraction = (clientX, clientY) => {
-    if (!isPanningRef.current) return;
-
-    const {
-      enableClickToGo: clickEnabled,
-      mapMeta: meta,
-      imageObj: img,
-      scale: currentScale,
-      offset: currentOffset,
-      onMapGoalClick: onClick,
-    } = interactionRef.current;
-
-    if (clickEnabled && !didPanRef.current && meta && img && onClick) {
-      const canvas = canvasRef.current;
-      if (canvas) {
-        const { x: canvasX, y: canvasY } = clientToCanvasPixel(clientX, clientY, canvas);
-        const layout = layoutRef.current
-          ?? getMapViewLayout(img, canvas.width, canvas.height);
-        const { fitScale, centerX, centerY } = layout;
-        const result = canvasToWorldGoal(
-          canvasX,
-          canvasY,
-          img,
-          meta,
-          mapImageDataRef.current,
-          fitScale,
-          centerX,
-          centerY,
-          currentScale,
-          currentOffset,
-        );
-
-        if (result) {
-          onClick(result);
-        }
-      }
-    }
-
+  const finishPointerInteraction = () => {
     isPanningRef.current = false;
     setIsPanning(false);
   };
@@ -767,9 +822,9 @@ const MapView = ({
     panStartPos.current = { x: e.clientX, y: e.clientY };
     lastMousePos.current = { x: e.clientX, y: e.clientY };
 
-    const handleWindowMouseUp = (ev) => {
+    const handleWindowMouseUp = () => {
       window.removeEventListener('mouseup', handleWindowMouseUp);
-      finishPointerInteraction(ev.clientX, ev.clientY);
+      finishPointerInteraction();
     };
     window.addEventListener('mouseup', handleWindowMouseUp);
   };
@@ -798,7 +853,7 @@ const MapView = ({
 
   const handleMouseUp = (e) => {
     if (e.button !== 0) return;
-    finishPointerInteraction(e.clientX, e.clientY);
+    finishPointerInteraction();
   };
 
   useEffect(() => {
@@ -833,7 +888,7 @@ const MapView = ({
 
       <div
         ref={containerRef}
-        className={`map-view-canvas-wrap${isPanning ? ' is-panning' : ''}${enableClickToGo ? ' is-click-nav' : ''}`}
+        className={`map-view-canvas-wrap${isPanning ? ' is-panning' : ''}`}
       >
         <canvas
           ref={canvasRef}
@@ -847,11 +902,6 @@ const MapView = ({
 
       <p className="map-view-footer">
         Fare tekerleği: yakınlaştır/uzaklaştır &nbsp;|&nbsp; Sol tık + sürükle: haritayı kaydır
-        {enableClickToGo && (
-          <span>
-            &nbsp;|&nbsp; Tek tık: hedef seç
-          </span>
-        )}
       </p>
     </div>
   );
