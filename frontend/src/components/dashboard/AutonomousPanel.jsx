@@ -1,5 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { useTelemetry } from '../../context/TelemetryContext';
+import React, { useState } from 'react';
 import {
   degreesToRadians,
   normalizeAngle,
@@ -33,22 +32,15 @@ export default function AutonomousPanel({
   queueBusy,
   showBusyPopup,
   onCloseBusyPopup,
+  manualX,
+  manualY,
+  manualYaw,
+  onManualXChange,
+  onManualYChange,
+  onManualYawChange,
 }) {
-  const { pose } = useTelemetry();
   const [presets, setPresets] = useState(loadPresets);
   const [presetName, setPresetName] = useState('');
-  const [manualX, setManualX] = useState('');
-  const [manualY, setManualY] = useState('');
-  const [manualYaw, setManualYaw] = useState('');
-  const manualFormInitialized = useRef(false);
-
-  useEffect(() => {
-    if (!pose || manualFormInitialized.current) return;
-    manualFormInitialized.current = true;
-    setManualX(pose.x.toFixed(2));
-    setManualY(pose.y.toFixed(2));
-    setManualYaw(((normalizeAngle(pose.yaw) * 180) / Math.PI).toFixed(1));
-  }, [pose]);
 
   const handleManualSubmit = (e) => {
     e.preventDefault();
@@ -141,7 +133,7 @@ export default function AutonomousPanel({
               type="number"
               step="0.01"
               value={manualX}
-              onChange={(e) => setManualX(e.target.value)}
+              onChange={(e) => onManualXChange(e.target.value)}
             />
           </label>
           <label className="autonomous-form__field">
@@ -150,7 +142,7 @@ export default function AutonomousPanel({
               type="number"
               step="0.01"
               value={manualY}
-              onChange={(e) => setManualY(e.target.value)}
+              onChange={(e) => onManualYChange(e.target.value)}
             />
           </label>
           <label className="autonomous-form__field">
@@ -159,7 +151,7 @@ export default function AutonomousPanel({
               type="number"
               step="0.1"
               value={manualYaw}
-              onChange={(e) => setManualYaw(e.target.value)}
+              onChange={(e) => onManualYawChange(e.target.value)}
             />
           </label>
           <button type="submit" className="autonomous-btn">Gönder</button>

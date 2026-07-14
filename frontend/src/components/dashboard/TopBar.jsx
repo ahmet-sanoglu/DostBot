@@ -1,6 +1,8 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Topic } from 'roslib';
 import { useRos } from '../../context/RosContext';
+import logo from '../../assets/dost-tarim-logo.jpeg';
 
 const CMD_VEL_TOPIC = '/cmd_vel';
 const DEMO_BATTERY_PERCENT = 87;
@@ -37,25 +39,26 @@ function TopBarBattery() {
     <div className="top-bar__battery" aria-label={`Batarya ${DEMO_BATTERY_PERCENT}%`}>
       <span className="top-bar__battery-icon" aria-hidden="true">🔋</span>
       <span className="top-bar__battery-percent">{DEMO_BATTERY_PERCENT}%</span>
-      <div className="top-bar__battery-bar">
-        <div
-          className="top-bar__battery-fill"
-          style={{ width: `${DEMO_BATTERY_PERCENT}%` }}
-        />
-      </div>
     </div>
   );
 }
 
 export default function TopBar() {
+  const navigate = useNavigate();
   const { status } = useRos();
   const isConnected = status === 'ROS bağlantısı kuruldu';
 
   return (
     <header className="top-bar">
       <div className="top-bar__brand">
-        <span className="top-bar__brand-icon">🌾</span>
-        <span>AgriFleet</span>
+        <img
+          src={logo}
+          alt="Dost Tarım Teknolojileri"
+          className="top-bar__brand-logo"
+          onClick={() => navigate('/')}
+        />
+        <div className="top-bar__brand-divider" aria-hidden="true" />
+        <span className="top-bar__brand-title">Kontrol paneli</span>
       </div>
 
       <div className="top-bar__actions">

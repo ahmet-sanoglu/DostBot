@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import MapView from '../components/MapView';
 import AutonomousPanel from '../components/dashboard/AutonomousPanel';
 import { useRos } from '../context/RosContext';
@@ -14,6 +14,18 @@ export default function AutonomousPage() {
   const [lastSentGoal, setLastSentGoal] = useState(null);
   const [queueBusy, setQueueBusy] = useState(false);
   const [showBusyPopup, setShowBusyPopup] = useState(false);
+  const [manualX, setManualX] = useState('');
+  const [manualY, setManualY] = useState('');
+  const [manualYaw, setManualYaw] = useState('');
+  const manualFormInitialized = useRef(false);
+
+  useEffect(() => {
+    if (!pose || manualFormInitialized.current) return;
+    manualFormInitialized.current = true;
+    setManualX(pose.x.toFixed(2));
+    setManualY(pose.y.toFixed(2));
+    setManualYaw(((normalizeAngle(pose.yaw) * 180) / Math.PI).toFixed(1));
+  }, [pose]);
 
   const sendNavigationGoal = useCallback((goal, sourceLabel) => {
     if (queueBusy) {
@@ -31,9 +43,13 @@ export default function AutonomousPage() {
     return true;
   }, [queueBusy, ros]);
 
-  const handleMapClick = ({ x, y }) => {
+  const handleMapClick = (worldPos) => {
+    console.log('HARITA TIKLAMA CALISTI', worldPos);
     const yaw = pose?.yaw != null ? normalizeAngle(pose.yaw) : 0;
-    sendNavigationGoal({ x, y, yaw }, 'Harita tıklama');
+    setManualX(worldPos.x.toFixed(2));
+    setManualY(worldPos.y.toFixed(2));
+    setManualYaw(((yaw * 180) / Math.PI).toFixed(1));
+    sendNavigationGoal({ x: worldPos.x, y: worldPos.y, yaw }, 'Harita tıklama');
   };
 
   return (
@@ -55,6 +71,12 @@ export default function AutonomousPage() {
         queueBusy={queueBusy}
         showBusyPopup={showBusyPopup}
         onCloseBusyPopup={() => setShowBusyPopup(false)}
+        manualX={manualX}
+        manualY={manualY}
+        manualYaw={manualYaw}
+        onManualXChange={setManualX}
+        onManualYChange={setManualY}
+        onManualYawChange={setManualYaw}
       />
     </div>
   );

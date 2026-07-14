@@ -11,26 +11,289 @@ const TRAIL_MAX = 200;
 const TRAIL_MIN_DIST_M = 0.05;
 const FREE_SPACE_THRESHOLD = 250;
 const MAP_THEME = {
-  free: { r: 0xe8, g: 0xec, b: 0xf1, a: 255 },
-  obstacle: { r: 0x1e, g: 0x2a, b: 0x3a, a: 255 },
-  unknown: { r: 0xb8, g: 0xc0, b: 0xcc, a: 128 },
+  free: { r: 0xf0, g: 0xfd, b: 0xf4, a: 255 },
+  obstacle: { r: 0x33, g: 0x41, b: 0x55, a: 255 },
+  unknown: { r: 0xcb, g: 0xd5, b: 0xe1, a: 200 },
 };
 const POS_SMOOTH_ALPHA = 0.35;
 const YAW_SMOOTH_ALPHA = 0.25;
 // Harita 90° saat yönünde döndürülerek yatay (landscape) gösterilir
 const MAP_ROTATION = Math.PI / 2;
 
+/** Canlı/dinamik harita boyutları — imageObj değiştikçe tüm dönüşümler güncellenir. */
+function getImageSize(imageObj) {
+  return { width: imageObj.width, height: imageObj.height };
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+/** Ham occupancy piksel koordinatını [0, W)×[0, H) aralığına sıkıştırır. */
+function clampImagePixel(pixelX, pixelY, imageSize) {
+  const maxX = Math.max(0, imageSize.width - 1);
+  const maxY = Math.max(0, imageSize.height - 1);
+  return {
+    x: clamp(pixelX, 0, maxX),
+    y: clamp(pixelY, 0, maxY),
+  };
+}
+
+function isImagePixelInBounds(pixelX, pixelY, imageSize, epsilon = 1e-4) {
+  return (
+    pixelX >= -epsilon
+    && pixelX < imageSize.width - epsilon
+    && pixelY >= -epsilon
+    && pixelY < imageSize.height - epsilon
+  );
+}
+
 /**
- * 90° döndürülmüş haritanın canvas'a sığması için ölçek ve merkez ofseti.
- * Döndürme sonrası görünen boyut: yükseklik × genişlik (W×H → H×W).
+ * Döndürülmüş haritanın ekrandaki görünen boyutu: H × W piksel.
+ *
+ * Canvas iç transform (kod sırası): translate(0, W−1) → rotate(−π/2)
+ * Noktaya uygulama sırası (API): önce rotate, sonra translate
+ * → display-local: (iy, W−1−ix), her iki eksen [0, H) × [0, W)
  */
-function getMapFitTransform(imageObj, canvasWidth, canvasHeight) {
-  const mapDisplayW = imageObj.height;
-  const mapDisplayH = imageObj.width;
-  const fitScale = Math.min(canvasWidth / mapDisplayW, canvasHeight / mapDisplayH);
-  const centerX = (canvasWidth - mapDisplayW * fitScale) / 2;
-  const centerY = (canvasHeight - mapDisplayH * fitScale) / 2;
+function getMapFitTransform(imageSize, canvasWidth, canvasHeight) {
+  const displayW = imageSize.height;
+  const displayH = imageSize.width;
+
+  if (canvasWidth <= 0 || canvasHeight <= 0) {
+    return { fitScale: 1, centerX: 0, centerY: 0 };
+  }
+
+  const fitScale = Math.min(canvasWidth / displayW, canvasHeight / displayH);
+  const centerX = (canvasWidth - displayW * fitScale) / 2;
+  const centerY = (canvasHeight - displayH * fitScale) / 2;
+
   return { fitScale, centerX, centerY };
+}
+
+/** Çizim + tıklama için birleşik layout (canvas gerçek piksel boyutları). */
+function getMapViewLayout(imageObj, canvasWidth, canvasHeight) {
+  const imageSize = getImageSize(imageObj);
+  return {
+    imageSize,
+    ...getMapFitTransform(imageSize, canvasWidth, canvasHeight),
+  };
+}
+
+/**
+ * İleri: image (ix, iy) → display-local (iy, W−1−ix).
+ * canvasToImagePixel ile birebir terslenebilir.
+ */
+function imagePixelToDisplayLocal(pixelX, pixelY, imageSize) {
+  return {
+    x: pixelY,
+    y: imageSize.width - 1 - pixelX,
+  };
+}
+
+/** Display-local → image (ix, iy). */
+function displayLocalToImagePixel(localX, localY, imageSize) {
+  return {
+    x: imageSize.width - 1 - localY,
+    y: localX,
+  };
+}
+
+/**
+ * İleri: image → canvas.
+ * offset → userScale → center → fitScale → display-local
+ */
+function imagePixelToCanvas(
+  pixelX,
+  pixelY,
+  imageSize,
+  fitScale,
+  centerX,
+  centerY,
+  userScale,
+  offset,
+) {
+  const { x: localX, y: localY } = imagePixelToDisplayLocal(pixelX, pixelY, imageSize);
+  const viewX = centerX + fitScale * localX;
+  const viewY = centerY + fitScale * localY;
+  return {
+    x: offset.x + userScale * viewX,
+    y: offset.y + userScale * viewY,
+  };
+}
+
+/** Ters: canvas → image (imagePixelToCanvas ile ters). */
+function canvasToImagePixel(
+  canvasX,
+  canvasY,
+  imageSize,
+  fitScale,
+  centerX,
+  centerY,
+  userScale,
+  offset,
+) {
+  const viewX = (canvasX - offset.x) / userScale;
+  const viewY = (canvasY - offset.y) / userScale;
+  const localX = (viewX - centerX) / fitScale;
+  const localY = (viewY - centerY) / fitScale;
+  return displayLocalToImagePixel(localX, localY, imageSize);
+}
+
+/** clientX/Y → canvas iç piksel (CSS boyutu ≠ canvas.width ise ölçeklenir). */
+function clientToCanvasPixel(clientX, clientY, canvas) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  return {
+    x: (clientX - rect.left) * scaleX,
+    y: (clientY - rect.top) * scaleY,
+  };
+}
+
+/**
+ * ROS dünya (m) → ham occupancy pikseli (döndürme öncesi).
+ * Y ekseni: dünya ↑ = piksel ↓ (standart nav_msgs/OccupancyGrid).
+ */
+function worldToPixel(worldX, worldY, metadata, imageSize) {
+  const pixelX = (worldX - metadata.origin[0]) / metadata.resolution;
+  const pixelY = imageSize.height - (worldY - metadata.origin[1]) / metadata.resolution;
+  return { x: pixelX, y: pixelY };
+}
+
+/** Ham occupancy pikseli → ROS dünya (m). worldToPixel ile terslenebilir. */
+function imagePixelToWorld(pixelX, pixelY, metadata, imageSize) {
+  const worldX = pixelX * metadata.resolution + metadata.origin[0];
+  const worldY = (imageSize.height - pixelY) * metadata.resolution + metadata.origin[1];
+  return { x: worldX, y: worldY };
+}
+
+/** Dünya koordinatını harita sınırları içinde tutar (köşe piksellerine clamp). */
+function clampWorldToMapBounds(worldX, worldY, metadata, imageSize) {
+  const pixel = worldToPixel(worldX, worldY, metadata, imageSize);
+  const clamped = clampImagePixel(pixel.x, pixel.y, imageSize);
+  return imagePixelToWorld(clamped.x, clamped.y, metadata, imageSize);
+}
+
+function getPixelValue(imageData, x, y, imageWidth, imageHeight) {
+  const ix = Math.floor(x);
+  const iy = Math.floor(y);
+  if (ix < 0 || ix >= imageWidth || iy < 0 || iy >= imageHeight) {
+    return 0;
+  }
+  return imageData.data[(iy * imageWidth + ix) * 4];
+}
+
+function isFreePixel(imageData, x, y, imageWidth, imageHeight) {
+  return getPixelValue(imageData, x, y, imageWidth, imageHeight) > FREE_SPACE_THRESHOLD;
+}
+
+/**
+ * Gri/siyah pikseldeyse en yakın geçilebilir (beyaz) piksele snap eder.
+ * Hedef önce harita sınırlarına clamp edilir — arama asla dışarı taşmaz.
+ */
+function snapToFreePixel(imageData, targetX, targetY, imageWidth, imageHeight) {
+  const clampedX = clamp(targetX, 0, Math.max(0, imageWidth - 1));
+  const clampedY = clamp(targetY, 0, Math.max(0, imageHeight - 1));
+
+  if (isFreePixel(imageData, clampedX, clampedY, imageWidth, imageHeight)) {
+    return { x: clampedX, y: clampedY };
+  }
+
+  const originX = Math.round(clampedX);
+  const originY = Math.round(clampedY);
+
+  for (let radius = 5; radius <= 100; radius += 5) {
+    let bestDist = Infinity;
+    let best = null;
+
+    for (let dy = -radius; dy <= radius; dy += 3) {
+      for (let dx = -radius; dx <= radius; dx += 3) {
+        const cheb = Math.max(Math.abs(dx), Math.abs(dy));
+        if (cheb < radius - 4 || cheb > radius) continue;
+
+        const nx = originX + dx;
+        const ny = originY + dy;
+        if (nx < 0 || nx >= imageWidth || ny < 0 || ny >= imageHeight) continue;
+        if (!isFreePixel(imageData, nx, ny, imageWidth, imageHeight)) continue;
+
+        const dist = dx * dx + dy * dy;
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = { x: nx, y: ny };
+        }
+      }
+    }
+
+    if (best) return best;
+  }
+
+  return { x: clampedX, y: clampedY };
+}
+
+function worldToDisplayPixel(worldX, worldY, mapMeta, imageObj, imageData) {
+  const imageSize = getImageSize(imageObj);
+  const pixel = worldToPixel(worldX, worldY, mapMeta, imageSize);
+  const clamped = clampImagePixel(pixel.x, pixel.y, imageSize);
+
+  if (!imageData) {
+    return clamped;
+  }
+
+  return snapToFreePixel(
+    imageData,
+    clamped.x,
+    clamped.y,
+    imageSize.width,
+    imageSize.height,
+  );
+}
+
+/**
+ * Canvas tıklamasını harita sınırları + snap ile dünya koordinatına çevirir.
+ * Sınır dışı tıklamalarda null döner.
+ */
+function canvasToWorldGoal(
+  canvasX,
+  canvasY,
+  imageObj,
+  metadata,
+  imageData,
+  fitScale,
+  centerX,
+  centerY,
+  userScale,
+  offset,
+) {
+  const imageSize = getImageSize(imageObj);
+
+  const raw = canvasToImagePixel(
+    canvasX,
+    canvasY,
+    imageSize,
+    fitScale,
+    centerX,
+    centerY,
+    userScale,
+    offset,
+  );
+
+  if (!isImagePixelInBounds(raw.x, raw.y, imageSize)) {
+    return null;
+  }
+
+  const clamped = clampImagePixel(raw.x, raw.y, imageSize);
+  const snapped = imageData
+    ? snapToFreePixel(
+      imageData,
+      clamped.x,
+      clamped.y,
+      imageSize.width,
+      imageSize.height,
+    )
+    : clamped;
+
+  const world = imagePixelToWorld(snapped.x, snapped.y, metadata, imageSize);
+  return clampWorldToMapBounds(world.x, world.y, metadata, imageSize);
 }
 
 /** Ham occupancy piksellerini dashboard temasına göre renklendirir. */
@@ -70,104 +333,6 @@ function buildThemedMapImage(sourceImage) {
  */
 function quaternionToYaw(x, y, z, w) {
   return Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
-}
-
-/**
- * ROS dünya koordinatını orijinal (döndürülmemiş) harita piksel koordinatına çevirir.
- * Harita döndürmesi canvas transform'unda uygulanır; bu fonksiyon sadece resolution/origin kullanır.
- */
-function worldToPixel(worldX, worldY, metadata, imageHeight) {
-  const pixelX = (worldX - metadata.origin[0]) / metadata.resolution;
-  const pixelY = imageHeight - (worldY - metadata.origin[1]) / metadata.resolution;
-
-  return { x: pixelX, y: pixelY };
-}
-
-function imagePixelToWorld(pixelX, pixelY, metadata, imageHeight) {
-  const worldX = pixelX * metadata.resolution + metadata.origin[0];
-  const worldY = (imageHeight - pixelY) * metadata.resolution + metadata.origin[1];
-  return { x: worldX, y: worldY };
-}
-
-/** Canvas tıklamasını orijinal harita piksel koordinatına çevirir. */
-function canvasToImagePixel(canvasX, canvasY, imageObj, fitScale, centerX, centerY, scale, offset) {
-  let sx = (canvasX - offset.x) / scale;
-  let sy = (canvasY - offset.y) / scale;
-  const rx = (sx - centerX) / fitScale;
-  const ry = (sy - centerY) / fitScale;
-  const iy = -rx;
-  const ix = ry - imageObj.height;
-  return { x: ix, y: iy };
-}
-
-function getPixelValue(imageData, x, y, imageWidth, imageHeight) {
-  const ix = Math.floor(x);
-  const iy = Math.floor(y);
-  if (ix < 0 || ix >= imageWidth || iy < 0 || iy >= imageHeight) {
-    return 0;
-  }
-  return imageData.data[(iy * imageWidth + ix) * 4];
-}
-
-function isFreePixel(imageData, x, y, imageWidth, imageHeight) {
-  return getPixelValue(imageData, x, y, imageWidth, imageHeight) > FREE_SPACE_THRESHOLD;
-}
-
-/**
- * Gri/siyah pikseldeyse en yakın geçilebilir (beyaz) piksele snap eder.
- * Zaten beyazsa koordinatı değiştirmez — gereksiz sıçramayı önler.
- */
-function snapToFreePixel(imageData, targetX, targetY, imageWidth, imageHeight) {
-  if (isFreePixel(imageData, targetX, targetY, imageWidth, imageHeight)) {
-    return { x: targetX, y: targetY };
-  }
-
-  const originX = Math.round(targetX);
-  const originY = Math.round(targetY);
-
-  for (let radius = 5; radius <= 100; radius += 5) {
-    let bestDist = Infinity;
-    let best = null;
-
-    for (let dy = -radius; dy <= radius; dy += 3) {
-      for (let dx = -radius; dx <= radius; dx += 3) {
-        const cheb = Math.max(Math.abs(dx), Math.abs(dy));
-        if (cheb < radius - 4 || cheb > radius) continue;
-
-        const nx = originX + dx;
-        const ny = originY + dy;
-        if (!isFreePixel(imageData, nx, ny, imageWidth, imageHeight)) continue;
-
-        const dist = dx * dx + dy * dy;
-        if (dist < bestDist) {
-          bestDist = dist;
-          best = { x: nx, y: ny };
-        }
-      }
-    }
-
-    if (best) return best;
-  }
-
-  return { x: targetX, y: targetY };
-}
-
-function worldToDisplayPixel(worldX, worldY, mapMeta, imageObj, imageData) {
-  const { x, y } = worldToPixel(worldX, worldY, mapMeta, imageObj.height);
-  const clampedX = Math.max(0, Math.min(imageObj.width - 1, x));
-  const clampedY = Math.max(0, Math.min(imageObj.height - 1, y));
-
-  if (!imageData) {
-    return { x: clampedX, y: clampedY };
-  }
-
-  return snapToFreePixel(
-    imageData,
-    clampedX,
-    clampedY,
-    imageObj.width,
-    imageObj.height,
-  );
 }
 
 /** Açıyı [-π, +π] aralığına sarar. */
@@ -240,9 +405,9 @@ function drawRobotArrow(ctx, x, y, yaw, scale) {
   ctx.lineTo(-size * 0.65, -size * 0.6);
   ctx.closePath();
 
-  ctx.fillStyle = '#ff6b00';
+  ctx.fillStyle = '#06A89B';
   ctx.fill();
-  ctx.strokeStyle = '#b83200';
+  ctx.strokeStyle = '#025539';
   ctx.lineWidth = 1.5 / scale;
   ctx.stroke();
 
@@ -254,21 +419,21 @@ function drawGoalMarker(ctx, x, y, scale) {
   const radius = 10 / scale;
 
   ctx.save();
-  ctx.shadowColor = 'rgba(99, 102, 241, 0.55)';
+  ctx.shadowColor = 'rgba(6, 168, 155, 0.45)';
   ctx.shadowBlur = 8 / scale;
 
   ctx.beginPath();
   ctx.arc(x, y, radius, 0, 2 * Math.PI);
-  ctx.fillStyle = 'rgba(99, 102, 241, 0.35)';
+  ctx.fillStyle = 'rgba(6, 168, 155, 0.25)';
   ctx.fill();
-  ctx.strokeStyle = '#818cf8';
+  ctx.strokeStyle = '#06A89B';
   ctx.lineWidth = 2 / scale;
   ctx.stroke();
 
   ctx.beginPath();
   ctx.moveTo(x, y);
   ctx.lineTo(x + radius * 1.4, y);
-  ctx.strokeStyle = '#c7d2fe';
+  ctx.strokeStyle = 'rgba(6, 168, 155, 0.55)';
   ctx.lineWidth = 1.5 / scale;
   ctx.stroke();
 
@@ -279,7 +444,7 @@ function drawGoalMarker(ctx, x, y, scale) {
 function drawPositionTrail(ctx, trail, mapMeta, imageObj, imageData, scale) {
   const dotRadius = 1.5 / scale;
 
-  ctx.fillStyle = 'rgba(128, 128, 128, 0.4)';
+  ctx.fillStyle = 'rgba(6, 168, 155, 0.35)';
 
   for (const point of trail) {
     const { x, y } = worldToDisplayPixel(
@@ -332,9 +497,12 @@ const MapView = ({
   const panStartPos = useRef({ x: 0, y: 0 });
   const didPanRef = useRef(false);
   const interactionRef = useRef({});
+  const layoutRef = useRef(null);
+  const viewResetKeyRef = useRef('');
 
   interactionRef.current = {
     enableClickToGo,
+    clickEnabled: enableClickToGo,
     mapMeta,
     imageObj,
     scale,
@@ -442,6 +610,16 @@ const MapView = ({
     return () => observer.disconnect();
   }, []);
 
+  // Harita veya canvas boyutu değişince zoom/pan sıfırla — ilk açılışta ortalanmış görünüm
+  useEffect(() => {
+    if (!imageObj || canvasSize.width === 0 || canvasSize.height === 0) return;
+    const key = `${canvasSize.width}x${canvasSize.height}-${imageObj.width}x${imageObj.height}`;
+    if (key === viewResetKeyRef.current) return;
+    viewResetKeyRef.current = key;
+    setScale(1);
+    setOffset({ x: 0, y: 0 });
+  }, [canvasSize.width, canvasSize.height, imageObj]);
+
   // ── Canvas çizim fonksiyonu (harita + robot konumu) ──
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -454,12 +632,11 @@ const MapView = ({
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    const { fitScale, centerX, centerY } = getMapFitTransform(
-      imageObj,
-      canvas.width,
-      canvas.height,
-    );
+    const layout = getMapViewLayout(imageObj, canvas.width, canvas.height);
+    const { imageSize, fitScale, centerX, centerY } = layout;
     const totalScale = scale * fitScale;
+
+    layoutRef.current = layout;
 
     // Kullanıcı zoom/pan + haritayı kapsayıcıya sığdırma
     ctx.save();
@@ -468,10 +645,10 @@ const MapView = ({
     ctx.translate(centerX, centerY);
     ctx.scale(fitScale, fitScale);
 
-    // Harita + robot: aynı döndürme transform'u içinde çizilir
+    // translate → rotate(−π/2): noktaya önce rotate, sonra translate(0,W−1) → (iy, W−1−ix)
     ctx.save();
-    ctx.translate(imageObj.height, 0);
-    ctx.rotate(MAP_ROTATION);
+    ctx.translate(0, imageSize.width - 1);
+    ctx.rotate(-MAP_ROTATION);
     ctx.drawImage(themedImageObj, 0, 0);
 
     if (mapMeta && positionTrail.length > 0) {
@@ -525,9 +702,7 @@ const MapView = ({
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const rect = canvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
+    const { x: mouseX, y: mouseY } = clientToCanvasPixel(e.clientX, e.clientY, canvas);
     const currentScale = scaleRef.current;
     const currentOffset = offsetRef.current;
 
@@ -557,18 +732,16 @@ const MapView = ({
     if (clickEnabled && !didPanRef.current && meta && img && onClick) {
       const canvas = canvasRef.current;
       if (canvas) {
-        const rect = canvas.getBoundingClientRect();
-        const canvasX = clientX - rect.left;
-        const canvasY = clientY - rect.top;
-        const { fitScale, centerX, centerY } = getMapFitTransform(
-          img,
-          canvas.width,
-          canvas.height,
-        );
-        const { x: pixelX, y: pixelY } = canvasToImagePixel(
+        const { x: canvasX, y: canvasY } = clientToCanvasPixel(clientX, clientY, canvas);
+        const layout = layoutRef.current
+          ?? getMapViewLayout(img, canvas.width, canvas.height);
+        const { fitScale, centerX, centerY } = layout;
+        const result = canvasToWorldGoal(
           canvasX,
           canvasY,
           img,
+          meta,
+          mapImageDataRef.current,
           fitScale,
           centerX,
           centerY,
@@ -576,12 +749,8 @@ const MapView = ({
           currentOffset,
         );
 
-        if (
-          pixelX >= 0 && pixelX < img.width
-          && pixelY >= 0 && pixelY < img.height
-        ) {
-          const world = imagePixelToWorld(pixelX, pixelY, meta, img.height);
-          onClick(world);
+        if (result) {
+          onClick(result);
         }
       }
     }
@@ -608,8 +777,14 @@ const MapView = ({
   const handleMouseMove = (e) => {
     if (!isPanningRef.current) return;
 
-    const dx = e.clientX - lastMousePos.current.x;
-    const dy = e.clientY - lastMousePos.current.y;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const dx = (e.clientX - lastMousePos.current.x) * scaleX;
+    const dy = (e.clientY - lastMousePos.current.y) * scaleY;
     lastMousePos.current = { x: e.clientX, y: e.clientY };
 
     const totalDx = e.clientX - panStartPos.current.x;
@@ -639,7 +814,7 @@ const MapView = ({
     <div className="map-view-root">
       <h2 className="map-view-header">Gerçek Zamanlı Sera Haritası</h2>
 
-      <div className="map-view-meta" style={{ marginBottom: '8px', fontSize: '14px', color: '#555' }}>
+      <div className="map-view-meta">
         {mapMeta && (
           <span>Çözünürlük: {mapMeta.resolution} m/px &nbsp;|&nbsp; </span>
         )}
@@ -670,7 +845,7 @@ const MapView = ({
         />
       </div>
 
-      <p className="map-view-footer" style={{ marginTop: '8px', fontSize: '13px', color: '#888' }}>
+      <p className="map-view-footer">
         Fare tekerleği: yakınlaştır/uzaklaştır &nbsp;|&nbsp; Sol tık + sürükle: haritayı kaydır
         {enableClickToGo && (
           <span>

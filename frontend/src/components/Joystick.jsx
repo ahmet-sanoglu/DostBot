@@ -46,8 +46,8 @@ const Joystick = () => {
       zone,
       mode: 'static',
       position: { left: '50%', top: '50%' },
-      color: 'rgba(255, 255, 255, 0.6)',
-      size: 120,
+      color: 'rgba(6, 168, 155, 0.75)',
+      size: 90,
       dynamicPage: true,
     });
 

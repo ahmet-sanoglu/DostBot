@@ -5,28 +5,45 @@
 }
 
 :root {
-  --color-bg: #0a0e14;
-  --color-bg-elevated: #0d1118;
-  --color-bg-sidebar: #0c1017;
-  --color-surface-from: #12161f;
-  --color-surface-to: #161b26;
-  --color-accent: #6366f1;
-  --color-accent-bright: #818cf8;
-  --color-accent-glow: rgba(99, 102, 241, 0.45);
-  --color-accent-subtle: rgba(99, 102, 241, 0.1);
-  --color-text-primary: #f3f4f6;
-  --color-text-secondary: #9ca3af;
-  --color-text-muted: #6b7280;
-  --color-border: rgba(255, 255, 255, 0.08);
-  --color-border-hover: rgba(255, 255, 255, 0.14);
-  --color-success: #22c55e;
+  /* Light corporate ag-tech palette */
+  --color-bg: #f8fafc;
+  --color-bg-elevated: #ffffff;
+  --color-bg-sidebar: #ffffff;
+  --color-bg-subtle: #f1f5f9;
+  --color-surface-from: #ffffff;
+  --color-surface-to: #f8fafc;
+
+  /* Dost Tarım brand palette */
+  --brand-dark-green: #025539;
+  --brand-teal: #06A89B;
+
+  --color-accent: var(--brand-dark-green);
+  --color-accent-bright: var(--brand-teal);
+  --color-accent-light: var(--brand-teal);
+  --color-accent-glow: rgba(6, 168, 155, 0.35);
+  --color-accent-subtle: rgba(6, 168, 155, 0.1);
+  --color-accent-muted: rgba(6, 168, 155, 0.06);
+
+  /* Typography — slate-850 equivalent */
+  --color-text-primary: #1a2332;
+  --color-text-secondary: #64748b;
+  --color-text-muted: #94a3b8;
+
+  --color-border: #e2e8f0;
+  --color-border-hover: #cbd5e1;
+
+  --color-success: var(--brand-teal);
   --color-danger: #ef4444;
+  --color-warning: #f59e0b;
+
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
   --radius-lg: 12px;
   --radius-md: 10px;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24);
-  --shadow-md: 0 4px 24px rgba(0, 0, 0, 0.32);
-  --shadow-bar: 0 1px 0 rgba(255, 255, 255, 0.04), 0 4px 16px rgba(0, 0, 0, 0.28);
+
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-md: 0 4px 16px rgba(15, 23, 42, 0.08);
+  --shadow-card: 0 1px 3px rgba(15, 23, 42, 0.06), 0 4px 12px rgba(15, 23, 42, 0.04);
+  --shadow-bar: 0 1px 0 rgba(15, 23, 42, 0.04), 0 2px 8px rgba(15, 23, 42, 0.06);
 }
 
 html,
@@ -41,6 +58,7 @@ body,
 
 body {
   background: var(--color-bg);
+  color: var(--color-text-primary);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
