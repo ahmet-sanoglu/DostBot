@@ -25,6 +25,8 @@ export default function ControlPanel({
   showInvalidGoalPopup,
   onCloseInvalidGoalPopup,
 }) {
+  // Başlat → DashboardPage.onStartTask geofence sırası: 1) occupancy piksel 2) sınır poligonu 3) yasak dikdörtgen.
+  // Harita engeli önce elenir; mühendis tanımlı kısıtlar en sonda uygulanır (isWorldGoalPassable).
   const handleStartTask = (task) => {
     onStartTask(task);
   };

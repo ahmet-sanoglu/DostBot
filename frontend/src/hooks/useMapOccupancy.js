@@ -58,6 +58,7 @@ export function useMapOccupancy(forbiddenZones = null, boundaryPolygon = null) {
     };
   }, []);
 
+  // Referans stabil kalmalı — aksi halde ControlPanel effect'leri sonsuz render döngüsüne girer.
   const isGoalPassable = useCallback((worldX, worldY) => (
     isWorldGoalPassable(
       worldX,

@@ -1,4 +1,4 @@
-/** Ray-casting: nokta dünya koordinatında çokgenin içinde mi? */
+/** Ray-casting — tarla/harita sınırı serbest çizilebildiği için dikdörtgen yerine poligon kullanılır. */
 export function isPointInPolygon(x, y, polygon) {
   if (!polygon || polygon.length < 3) return true;
 

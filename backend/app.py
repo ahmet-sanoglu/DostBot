@@ -78,6 +78,7 @@ def _read_map_data_file(map_id, filename):
 
 
 def _verify_admin_pin():
+    # Gerçek bir auth sistemi değil — sadece mühendis panelinde yanlışlıkla veri silmeyi engelleyen basit PIN katmanı.
     if not ADMIN_PIN:
         return False
     supplied = request.headers.get("X-Admin-Pin", "")
@@ -157,11 +158,9 @@ def _normalize_boundary_points(raw):
     return points
 
 
+# ROS occupancy grid metadata (resolution, origin) — harita üzerinde dünya↔piksel dönüşümü için.
 @app.route('/api/map/metadata', methods=['GET'])
 def get_map_metadata():
-    """
-    map.yaml dosyasindaki cozunurluk ve orijin verilerini JSON olarak doner.
-    """
     yaml_path = os.path.join(MAP_DIR, "map_from_bag.yaml")
     if not os.path.exists(yaml_path):
         return jsonify({"error": "Map metadata not found"}), 404
@@ -178,17 +177,16 @@ def get_map_metadata():
         return jsonify({"error": str(e)}), 500
 
 
+# PNG harita görüntüsü — frontend occupancy piksel örneklemesi bu dosyadan yapılır.
 @app.route('/api/map/image', methods=['GET'])
 def get_map_image():
-    """
-    Donusturulmus map_from_bag.png dosyasini dogrudan tarayiciya servis eder.
-    """
     if not os.path.exists(os.path.join(MAP_DIR, "map_from_bag.png")):
         return jsonify({"error": "Map image (PNG) not found. Run conversion script first."}), 404
 
     return send_from_directory(MAP_DIR, "map_from_bag.png")
 
 
+# Mühendis paneli girişi — PIN doğruysa sessionStorage'a yazılır, yazma işlemleri X-Admin-Pin ile korunur.
 @app.route('/api/admin/verify-pin', methods=['POST'])
 def verify_admin_pin():
     payload = request.get_json(silent=True) or {}
@@ -200,9 +198,9 @@ def verify_admin_pin():
     return jsonify({"valid": False, "error": "Invalid PIN"}), 401
 
 
+# Operatör arayüzünün kullandığı tek aktif harita (maps.json içinde isActive: true).
 @app.route('/api/maps/active', methods=['GET'])
 def get_active_map():
-    """isActive: true olan haritanin id ve name bilgisini dondurur."""
     active_maps = [entry for entry in _load_maps() if entry.get("isActive") is True]
     if not active_maps:
         return jsonify({"error": "No active map configured"}), 404
@@ -214,6 +212,7 @@ def get_active_map():
     })
 
 
+# Haritaya kayıtlı konum noktaları (görev adımlarında referans olarak kullanılır).
 @app.route('/api/maps/<map_id>/locations', methods=['GET'])
 def get_map_locations(map_id):
     data, error = _read_map_data_file(map_id, "locations.json")
@@ -222,6 +221,7 @@ def get_map_locations(map_id):
     return jsonify(data)
 
 
+# Yeni konum ekleme — PIN korumalı (mühendis paneli).
 @app.route('/api/maps/<map_id>/locations', methods=['POST'])
 def add_map_location(map_id):
     auth_error = _require_admin()
@@ -245,6 +245,7 @@ def add_map_location(map_id):
     return jsonify(location), 201
 
 
+# Konum silme — PIN korumalı.
 @app.route('/api/maps/<map_id>/locations/<location_id>', methods=['DELETE'])
 def delete_map_location(map_id, location_id):
     auth_error = _require_admin()
@@ -266,6 +267,7 @@ def delete_map_location(map_id, location_id):
     return jsonify({"ok": True})
 
 
+# Operatör panelindeki "Görevler" listesinin kaynağı.
 @app.route('/api/maps/<map_id>/tasks', methods=['GET'])
 def get_map_tasks(map_id):
     data, error = _read_map_data_file(map_id, "tasks.json")
@@ -274,6 +276,7 @@ def get_map_tasks(map_id):
     return jsonify(data)
 
 
+# Çok adımlı görev tanımı ekleme — PIN korumalı.
 @app.route('/api/maps/<map_id>/tasks', methods=['POST'])
 def add_map_task(map_id):
     auth_error = _require_admin()
@@ -297,6 +300,7 @@ def add_map_task(map_id):
     return jsonify(task), 201
 
 
+# Geofence poligonu — yoksa null döner (sınır çizilmemiş haritalarda kontrol atlanır).
 @app.route('/api/maps/<map_id>/boundary', methods=['GET'])
 def get_map_boundary(map_id):
     if not _validate_map_id(map_id):
@@ -315,6 +319,7 @@ def get_map_boundary(map_id):
     return jsonify({"points": points})
 
 
+# Mühendis panelinden çizilen geofence sınırını kaydeder — PIN korumalı.
 @app.route('/api/maps/<map_id>/boundary', methods=['POST'])
 def save_map_boundary(map_id):
     auth_error = _require_admin()
@@ -335,6 +340,7 @@ def save_map_boundary(map_id):
     return jsonify({"points": points})
 
 
+# Geofence sınırını kaldırır — sonrasında sadece occupancy + yasak bölgeler geçerli olur.
 @app.route('/api/maps/<map_id>/boundary', methods=['DELETE'])
 def delete_map_boundary(map_id):
     auth_error = _require_admin()
@@ -352,6 +358,7 @@ def delete_map_boundary(map_id):
     return jsonify({"ok": True})
 
 
+# Operatör hedef doğrulamasında kullanılan dikdörtgen yasak bölgeler.
 @app.route('/api/maps/<map_id>/forbidden-zones', methods=['GET'])
 def get_map_forbidden_zones(map_id):
     data, error = _read_map_data_file(map_id, "forbidden_zones.json")

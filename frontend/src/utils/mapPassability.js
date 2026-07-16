@@ -1,7 +1,7 @@
 import { isPointInForbiddenZone } from './forbiddenZones';
 import { isPointInPolygon } from './geofence';
 
-/** Occupancy grid: beyaz (~254) geçilebilir, gri (~205) bilinmeyen, siyah (~0) engel. */
+/** 240: beyaz (~254) geçilebilir sayılır; gri (~205) ve siyah (~0) engel — arada güvenli marj bırakır. */
 export const FREE_SPACE_THRESHOLD = 240;
 
 export function worldToOccupancyPixel(worldX, worldY, metadata, imageHeight) {
@@ -72,6 +72,7 @@ export function isWorldGoalPassable(
   }
 
   if (boundaryPolygon && boundaryPolygon.length >= 3) {
+    // Harita sınırı düzensiz şekilli olabildiği için dikdörtgen değil poligon kontrolü yapılır.
     if (!isPointInPolygon(worldX, worldY, boundaryPolygon)) {
       return false;
     }

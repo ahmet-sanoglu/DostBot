@@ -50,6 +50,9 @@
 
   /* Alias for design spec */
   --text-muted: var(--color-text-muted);
+
+  /* TopBar min-height — used for side panel scroll bounds */
+  --layout-top-bar-height: 96px;
 }
 
 html,

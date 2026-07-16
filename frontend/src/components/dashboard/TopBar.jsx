@@ -1,6 +1,7 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Topic } from 'roslib';
+import { useNavigation } from '../../context/NavigationContext';
 import { useRos } from '../../context/RosContext';
 import { CMD_VEL_JOY_TOPIC } from '../../utils/rosTopics';
 import logo from '../../assets/dost-tarim-logo.png';
@@ -8,8 +9,11 @@ const DEMO_BATTERY_PERCENT = 87;
 
 function EmergencyStopButton() {
   const { ros } = useRos();
+  const { emergencyStopNavigation } = useNavigation();
 
   const handleEmergencyStop = () => {
+    emergencyStopNavigation();
+
     if (!ros) return;
 
     const cmdVelTopic = new Topic({

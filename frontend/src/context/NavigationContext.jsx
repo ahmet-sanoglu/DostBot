@@ -8,7 +8,7 @@ import React, {
   useState,
 } from 'react';
 import { ROS_CONNECTED_STATUS, useRos } from './RosContext';
-import { publishNavigationGoal } from '../utils/rosNavigation';
+import { cancelActiveNavigationGoal, publishNavigationGoal } from '../utils/rosNavigation';
 
 const NAV_BUSY_MS = 8000;
 const MAX_EVENTS = 10;
@@ -23,9 +23,12 @@ function formatEventTime(date = new Date()) {
   });
 }
 
-export function getStatusText({ isConnected, queueBusy, activeTaskProgress }) {
+export function getStatusText({ isConnected, emergencyStopped, queueBusy, activeTaskProgress }) {
   if (!isConnected) {
     return '⚠️ Bağlantı Yok';
+  }
+  if (emergencyStopped) {
+    return '⛔ Durduruldu';
   }
   if (queueBusy && activeTaskProgress) {
     return `🎯 ${activeTaskProgress.taskName} - Adım ${activeTaskProgress.currentStep}/${activeTaskProgress.totalSteps}`;
@@ -54,8 +57,11 @@ export function NavigationProvider({ children }) {
   const [showBusyPopup, setShowBusyPopup] = useState(false);
   const [recentEvents, setRecentEvents] = useState([]);
   const [activeTaskProgress, setActiveTaskProgress] = useState(null);
+  const [emergencyStopped, setEmergencyStopped] = useState(false);
   const busyTimerRef = useRef(null);
+  const estopResetTimerRef = useRef(null);
   const wasBusyRef = useRef(false);
+  const estopTriggeredRef = useRef(false);
   const wasConnectedRef = useRef(status === ROS_CONNECTED_STATUS);
   const connectionInitializedRef = useRef(false);
   const pendingStepsRef = useRef([]);
@@ -108,6 +114,35 @@ export function NavigationProvider({ children }) {
     return sent;
   }, [addEvent, dispatchGoal, queueBusy]);
 
+  // Acil Dur (TopBar): Nav2 goal iptali + kuyruk/timer temizliği; joystick sıfırlama TopBar'da ayrı yapılır.
+  // estopTriggeredRef: queueBusy false olunca "görev tamamlandı" yerine "acil dur" event'i yazılması için.
+  const emergencyStopNavigation = useCallback(() => {
+    cancelActiveNavigationGoal();
+
+    if (busyTimerRef.current) {
+      window.clearTimeout(busyTimerRef.current);
+      busyTimerRef.current = null;
+    }
+
+    pendingStepsRef.current = [];
+    activeTaskRef.current = null;
+    setActiveTaskProgress(null);
+    clearPlanPath();
+
+    if (estopResetTimerRef.current) {
+      window.clearTimeout(estopResetTimerRef.current);
+    }
+
+    estopTriggeredRef.current = true;
+    setEmergencyStopped(true);
+    setQueueBusy(false);
+
+    estopResetTimerRef.current = window.setTimeout(() => {
+      setEmergencyStopped(false);
+      estopResetTimerRef.current = null;
+    }, 4000);
+  }, [clearPlanPath]);
+
   const startTask = useCallback((task) => {
     if (queueBusy || pendingStepsRef.current.length > 0) {
       setShowBusyPopup(true);
@@ -142,8 +177,18 @@ export function NavigationProvider({ children }) {
     return sent;
   }, [addEvent, dispatchGoal, queueBusy]);
 
+  // Çok adımlı görevler: Nav2 aynı anda tek hedef işler; kalan adımlar pendingStepsRef'te bekler.
+  // Meşgulken yeni görev reddedilir; mevcut adım bitince (timer) sıradaki otomatik dispatchGoal ile gider.
   useEffect(() => {
     if (wasBusyRef.current && !queueBusy) {
+      if (estopTriggeredRef.current) {
+        estopTriggeredRef.current = false;
+        clearPlanPath();
+        addEvent('Acil dur — navigasyon durduruldu');
+        wasBusyRef.current = queueBusy;
+        return;
+      }
+
       clearPlanPath();
 
       const pending = pendingStepsRef.current;
@@ -195,11 +240,14 @@ export function NavigationProvider({ children }) {
     if (busyTimerRef.current) {
       window.clearTimeout(busyTimerRef.current);
     }
+    if (estopResetTimerRef.current) {
+      window.clearTimeout(estopResetTimerRef.current);
+    }
   }, []);
 
   const statusText = useMemo(
-    () => getStatusText({ isConnected, queueBusy, activeTaskProgress }),
-    [isConnected, queueBusy, activeTaskProgress],
+    () => getStatusText({ isConnected, emergencyStopped, queueBusy, activeTaskProgress }),
+    [isConnected, emergencyStopped, queueBusy, activeTaskProgress],
   );
 
   const value = useMemo(
@@ -210,6 +258,8 @@ export function NavigationProvider({ children }) {
       setShowBusyPopup,
       sendNavigationGoal,
       startTask,
+      emergencyStopNavigation,
+      emergencyStopped,
       activeTaskProgress,
       recentEvents,
       statusText,
@@ -221,6 +271,8 @@ export function NavigationProvider({ children }) {
       showBusyPopup,
       sendNavigationGoal,
       startTask,
+      emergencyStopNavigation,
+      emergencyStopped,
       activeTaskProgress,
       recentEvents,
       statusText,

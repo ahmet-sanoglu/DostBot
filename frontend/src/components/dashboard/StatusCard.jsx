@@ -7,6 +7,7 @@ export default function StatusCard({ activeMap, showMapName = true }) {
     activeTaskProgress,
     lastSentGoal,
     queueBusy,
+    emergencyStopped,
   } = useNavigation();
 
   return (
@@ -19,8 +20,12 @@ export default function StatusCard({ activeMap, showMapName = true }) {
         <p className="control-panel__map-name">{activeMap.name}</p>
       )}
       <p className="control-panel__status-text">{statusText}</p>
-      <div className={`queue-badge ${queueBusy ? 'queue-badge--busy' : 'queue-badge--idle'}`}>
-        {queueBusy ? 'Meşgul — hedef işleniyor' : 'Hazır — yeni hedef kabul edilir'}
+      <div className={`queue-badge ${queueBusy && !emergencyStopped ? 'queue-badge--busy' : 'queue-badge--idle'}`}>
+        {emergencyStopped
+          ? 'Durduruldu'
+          : queueBusy
+            ? 'Meşgul — hedef işleniyor'
+            : 'Hazır — yeni hedef kabul edilir'}
       </div>
       {activeTaskProgress && (
         <p className="autonomous-panel__meta">

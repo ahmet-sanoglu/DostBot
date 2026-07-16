@@ -63,6 +63,7 @@ const Joystick = () => {
     };
 
     const handleEnd = () => {
+      // Deadman: parmak bırakılınca hız sıfırlanır — robot kendi başına hareket etmesin diye.
       velocityRef.current = { linearX: 0, angularZ: 0 };
       setIsActive(false);
       setDisplaySpeed({ linear: 0, angular: 0 });
@@ -83,6 +84,7 @@ const Joystick = () => {
   useEffect(() => {
     if (!ros) return;
 
+    // PS4 kolu ile aynı kanal; robot tarafında twist_mux bu topic'i birleştirir.
     const cmdVelTopic = new Topic({
       ros,
       name: CMD_VEL_JOY_TOPIC,
