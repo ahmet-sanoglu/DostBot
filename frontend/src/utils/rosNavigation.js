@@ -1,17 +1,23 @@
+// Robot navigasyon hedeflerini ROS'a gönderir ve iptal eder.
+// Nav2 "action" (hedef + geri bildirim + iptal) birincil yol; /goal_pose topic'i yedek/uyumluluk içindir.
+// Acil Dur butonu aktif hedefi goal.cancel() ile iptal etmek için activeNavGoal referansını tutar.
+
 import { ActionClient, Goal, Topic } from 'roslib';
 
 export const GOAL_POSE_TOPIC = '/goal_pose';
 export const NAV_ACTION_SERVER = '/navigate_to_pose';
 export const NAV_ACTION_TYPE = 'nav2_msgs/action/NavigateToPose';
 
-/** action_msgs/GoalStatus STATUS_CANCELED */
+/** ROS action iptal sonucu: action_msgs/GoalStatus STATUS_CANCELED = 6 */
 const GOAL_STATUS_CANCELED = 6;
 
+// ActionClient: ROS "action" protokolü için kalıcı istemci; her hedefte yeniden oluşturulmaz.
 let navigateActionClient = null;
 // Acil Dur iptali için son gönderilen Nav2 goal referansı — modül düzeyinde tutulur.
 let activeNavGoal = null;
 let cancelRequestedByEstop = false;
 
+/** Açıyı -π ile +π arasına sıkıştırır; robot yön hesaplarında taşmayı önler. */
 export function normalizeAngle(angle) {
   let a = angle;
   while (a > Math.PI) a -= 2 * Math.PI;
@@ -19,15 +25,21 @@ export function normalizeAngle(angle) {
   return a;
 }
 
+/**
+ * Yaw açısını (radyan, düzlemde dönüş) ROS quaternion formatına çevirir.
+ * Quaternion: robot yönelimini x,y,z,w dörtlüsüyle ifade eder; Nav2 hedef mesajında zorunludur.
+ */
 export function yawToQuaternion(yaw) {
   const half = normalizeAngle(yaw) / 2;
   return { x: 0, y: 0, z: Math.sin(half), w: Math.cos(half) };
 }
 
+/** Mühendis panelinde derece girilir; ROS metre/radyan kullanır — dönüşüm burada yapılır. */
 export function degreesToRadians(deg) {
   return (deg * Math.PI) / 180;
 }
 
+/** Action result mesajının iptal (CANCELED) durumuyla gelip gelmediğini kontrol eder. */
 function isCanceledActionResult(result) {
   if (!result) return false;
 
@@ -42,6 +54,7 @@ function isCanceledActionResult(result) {
   return JSON.stringify(result).toLowerCase().includes('cancel');
 }
 
+/** Aynı ros bağlantısı için tek ActionClient kullanır; gereksiz yeniden bağlantı önlenir. */
 function getOrCreateNavigateActionClient(ros) {
   if (!navigateActionClient || navigateActionClient.ros !== ros) {
     navigateActionClient = new ActionClient({
@@ -53,6 +66,7 @@ function getOrCreateNavigateActionClient(ros) {
   return navigateActionClient;
 }
 
+/** Dışarıdan aktif Nav2 hedefinin okunması (debug/test amaçlı). */
 export function getActiveNavGoal() {
   return activeNavGoal;
 }
@@ -70,6 +84,10 @@ export function cancelActiveNavigationGoal() {
   return true;
 }
 
+/**
+ * /goal_pose topic'ine tek seferlik PoseStamped yayınlar.
+ * Topic: ROS'ta tek yönlü mesaj kanalı (action'dan farklı olarak geri bildirim/iptal yok).
+ */
 function publishGoalPoseTopic(ros, { x, y, yaw, frameId = 'map' }) {
   const goalTopic = new Topic({
     ros,
@@ -92,7 +110,12 @@ function publishGoalPoseTopic(ros, { x, y, yaw, frameId = 'map' }) {
   console.log('[sendNavigationGoal] /goal_pose topic publish tamamlandı');
 }
 
-// Nav2 action birincil yol; /goal_pose ise RViz ve eski dinleyicilerle uyumluluk için paralel gönderilir.
+/**
+ * Navigasyon hedefini robota gönderir.
+ * 1) Nav2 action (birincil): geri bildirim, sonuç ve iptal destekler.
+ * 2) /goal_pose topic (paralel): RViz, eski scriptler veya action dinlemeyen araçlar için uyumluluk.
+ * İkisi de aynı koordinatları taşır; asıl navigasyon Nav2 action üzerinden yürür.
+ */
 export function publishNavigationGoal(ros, { x, y, yaw, frameId = 'map' }) {
   console.log('[sendNavigationGoal] başlatılıyor', { x, y, yaw, frameId });
 

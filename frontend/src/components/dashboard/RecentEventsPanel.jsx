@@ -1,6 +1,10 @@
+// Son Olaylar paneli — navigasyon ve bağlantı olaylarının kronolojik listesi.
+// Varsayılan kapalı; açılınca NavigationContext.recentEvents gösterilir.
+
 import React, { useState } from 'react';
 import { useNavigation } from '../../context/NavigationContext';
 
+/** Genişletilebilir olay listesi; en yeni kayıtlar üstte. */
 export default function RecentEventsPanel() {
   const { recentEvents } = useNavigation();
   const [expanded, setExpanded] = useState(false);

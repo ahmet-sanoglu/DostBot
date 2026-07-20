@@ -1,3 +1,7 @@
+// Operatör panelindeki canlı harita bileşeni.
+// ROS odometrisinden robot konumunu alır, occupancy grid PNG'sini çizer, zoom/pan ve rota izi gösterir.
+// Koordinat dönüşümleri birçok küçük fonksiyona bölündü — her biri tek bir adımı temsil eder (dünya↔piksel↔canvas).
+
 import React, { useEffect, useRef, useState } from 'react';
 import { Topic } from 'roslib';
 import { useRos } from '../context/RosContext';
@@ -7,7 +11,7 @@ import { FREE_SPACE_THRESHOLD, getOccupancyPixelRgba, isOccupancyPixelPassable }
 const MAP_METADATA_URL = 'http://localhost:5000/api/map/metadata';
 const MAP_IMAGE_URL = 'http://localhost:5000/api/map/image';
 const ODOMETRY_TOPIC = '/odometry/filtered_uwb';
-const TRAIL_MAX = 200;
+const TRAIL_MAX = 200;  // izde en fazla bu kadar nokta — sınırsız büyürse canvas çizimi yavaşlar
 const TRAIL_MIN_DIST_M = 0.05;
 const MAP_THEME = {
   free: { r: 0xf0, g: 0xfd, b: 0xf4, a: 255 },
@@ -16,8 +20,13 @@ const MAP_THEME = {
 };
 const POS_SMOOTH_ALPHA = 0.35;
 const YAW_SMOOTH_ALPHA = 0.25;
-// Harita 90° saat yönünde döndürülerek yatay (landscape) gösterilir
+// Harita 90° saat yönünde döndürülerek yatay (landscape) gösterilir.
+// İşaret (+π/2) ve ctx.rotate(-MAP_ROTATION) eşleşmesi matematiksel olarak doğrulandı; ters çevrilirse robot/ tıklama kayar.
 const MAP_ROTATION = Math.PI / 2;
+
+// ─── Koordinat dönüşüm katmanları (her fonksiyon tek adım; zincir halinde birleştirilir) ───
+// Dünya (m) ↔ ham piksel ↔ döndürülmüş display-local ↔ canvas piksel ↔ fare clientX/Y
+// Ayrı fonksiyonlar: tıklama, çizim ve debug'ta aynı adımı tekrar kullanmak ve ters dönüşümü doğrulamak için.
 
 /** Canlı/dinamik harita boyutları — imageObj değiştikçe tüm dönüşümler güncellenir. */
 function getImageSize(imageObj) {
@@ -28,7 +37,7 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-/** Ham occupancy piksel koordinatını [0, W)×[0, H) aralığına sıkıştırır. */
+/** Adım: ham occupancy pikselini harita sınırları içinde tutar (taşmayı önler). */
 function clampImagePixel(pixelX, pixelY, imageSize) {
   const maxX = Math.max(0, imageSize.width - 1);
   const maxY = Math.max(0, imageSize.height - 1);
@@ -38,6 +47,7 @@ function clampImagePixel(pixelX, pixelY, imageSize) {
   };
 }
 
+/** Piksel koordinatının görüntü sınırları içinde olup olmadığını kontrol eder. */
 function isImagePixelInBounds(pixelX, pixelY, imageSize, epsilon = 1e-4) {
   return (
     pixelX >= -epsilon
@@ -48,6 +58,7 @@ function isImagePixelInBounds(pixelX, pixelY, imageSize, epsilon = 1e-4) {
 }
 
 /**
+ * Adım: canvas'a sığdırma — döndürülmüş haritanın ekrandaki ölçeği ve ortalanma ofseti.
  * Döndürülmüş haritanın ekrandaki görünen boyutu: H × W piksel.
  *
  * Canvas iç transform (kod sırası): translate(0, W−1) → rotate(−π/2)
@@ -69,7 +80,7 @@ function getMapFitTransform(imageSize, canvasWidth, canvasHeight) {
   return { fitScale, centerX, centerY };
 }
 
-/** Çizim + tıklama için birleşik layout (canvas gerçek piksel boyutları). */
+/** Adım: imageSize + fitScale + center — çizim ve tıklama için birleşik layout. */
 function getMapViewLayout(imageObj, canvasWidth, canvasHeight) {
   const imageSize = getImageSize(imageObj);
   return {
@@ -79,8 +90,8 @@ function getMapViewLayout(imageObj, canvasWidth, canvasHeight) {
 }
 
 /**
- * İleri: image (ix, iy) → display-local (iy, W−1−ix).
- * canvasToImagePixel ile birebir terslenebilir.
+ * Adım: ham piksel → döndürülmüş display-local (iy, W−1−ix).
+ * canvasToImagePixel ile birebir terslenebilir olmalı — tıklama doğruluğu buna bağlı.
  */
 function imagePixelToDisplayLocal(pixelX, pixelY, imageSize) {
   return {
@@ -89,7 +100,7 @@ function imagePixelToDisplayLocal(pixelX, pixelY, imageSize) {
   };
 }
 
-/** Display-local → image (ix, iy). */
+/** Adım: display-local → ham piksel (imagePixelToDisplayLocal'ın tersi). */
 function displayLocalToImagePixel(localX, localY, imageSize) {
   return {
     x: imageSize.width - 1 - localY,
@@ -98,8 +109,8 @@ function displayLocalToImagePixel(localX, localY, imageSize) {
 }
 
 /**
- * İleri: image → canvas.
- * offset → userScale → center → fitScale → display-local
+ * Adım: ham piksel → canvas piksel (zoom/pan/fitScale zinciri).
+ * Sıra: display-local → fitScale ile ölçekle → kullanıcı offset/scale uygula.
  */
 function imagePixelToCanvas(
   pixelX,
@@ -120,7 +131,7 @@ function imagePixelToCanvas(
   };
 }
 
-/** Ters: canvas → image (imagePixelToCanvas ile ters). */
+/** Adım: canvas piksel → ham piksel (imagePixelToCanvas'ın tersi — tıklama hedefi için). */
 function canvasToImagePixel(
   canvasX,
   canvasY,
@@ -138,7 +149,7 @@ function canvasToImagePixel(
   return displayLocalToImagePixel(localX, localY, imageSize);
 }
 
-/** clientX/Y → canvas iç piksel (CSS boyutu ≠ canvas.width ise ölçeklenir). */
+/** Adım: tarayıcı fare koordinatı (clientX/Y) → canvas iç piksel; CSS boyutu ≠ canvas.width ise ölçeklenir. */
 function clientToCanvasPixel(clientX, clientY, canvas) {
   const rect = canvas.getBoundingClientRect();
   const scaleX = canvas.width / rect.width;
@@ -150,8 +161,8 @@ function clientToCanvasPixel(clientX, clientY, canvas) {
 }
 
 /**
- * ROS dünya (m) → ham occupancy pikseli (döndürme öncesi).
- * Y ekseni: dünya ↑ = piksel ↓ (standart nav_msgs/OccupancyGrid).
+ * Adım: ROS dünya koordinatı (metre) → ham occupancy pikseli (döndürme öncesi).
+ * Y ekseni: dünya ↑ = piksel ↓ (standart occupancy grid convention).
  */
 function worldToPixel(worldX, worldY, metadata, imageSize) {
   const pixelX = (worldX - metadata.origin[0]) / metadata.resolution;
@@ -159,20 +170,21 @@ function worldToPixel(worldX, worldY, metadata, imageSize) {
   return { x: pixelX, y: pixelY };
 }
 
-/** Ham occupancy pikseli → ROS dünya (m). worldToPixel ile terslenebilir. */
+/** Adım: ham piksel → ROS dünya (m); worldToPixel ile terslenebilir. */
 function imagePixelToWorld(pixelX, pixelY, metadata, imageSize) {
   const worldX = pixelX * metadata.resolution + metadata.origin[0];
   const worldY = (imageSize.height - pixelY) * metadata.resolution + metadata.origin[1];
   return { x: worldX, y: worldY };
 }
 
-/** Dünya koordinatını harita sınırları içinde tutar (köşe piksellerine clamp). */
+/** Dünya koordinatını harita sınırları içinde tutar — köşe piksellerine clamp edip geri çevirir. */
 function clampWorldToMapBounds(worldX, worldY, metadata, imageSize) {
   const pixel = worldToPixel(worldX, worldY, metadata, imageSize);
   const clamped = clampImagePixel(pixel.x, pixel.y, imageSize);
   return imagePixelToWorld(clamped.x, clamped.y, metadata, imageSize);
 }
 
+/** Tek pikselin gri tonunu okur (geçilebilirlik karşılaştırması için). */
 function getPixelValue(imageData, x, y, imageWidth, imageHeight) {
   const ix = Math.floor(x);
   const iy = Math.floor(y);
@@ -182,6 +194,7 @@ function getPixelValue(imageData, x, y, imageWidth, imageHeight) {
   return imageData.data[(iy * imageWidth + ix) * 4];
 }
 
+/** Piksel eşiğinin üstündeyse geçilebilir (beyaz/açık alan) sayılır. */
 function isFreePixel(imageData, x, y, imageWidth, imageHeight) {
   return getPixelValue(imageData, x, y, imageWidth, imageHeight) > FREE_SPACE_THRESHOLD;
 }
@@ -229,6 +242,7 @@ function snapToFreePixel(imageData, targetX, targetY, imageWidth, imageHeight) {
   return { x: clampedX, y: clampedY };
 }
 
+/** Dünya koordinatını ekranda çizilecek piksele çevirir; engeldeyse en yakın geçilebilir piksele snap eder. */
 function worldToDisplayPixel(worldX, worldY, mapMeta, imageObj, imageData) {
   const imageSize = getImageSize(imageObj);
   const pixel = worldToPixel(worldX, worldY, mapMeta, imageSize);
@@ -404,14 +418,15 @@ function buildThemedMapImage(sourceImage) {
   return { rawData, themedCanvas: canvas };
 }
 
-/**
- * Quaternion'dan Z ekseni etrafındaki yaw açısını (radyan) hesaplar.
- */
+/** ROS orientation quaternion'ından düzlemdeki yaw açısını (radyan) çıkarır. */
 function quaternionToYaw(x, y, z, w) {
   return Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
 }
 
-/** Açıyı [-π, +π] aralığına sarar. */
+/**
+ * Açıyı [-π, +π] aralığına sarar.
+ * Bu yapılmazsa yaw birikerek (accumulation) binlerce dereceye çıkar ve ok yanlış yöne bakar.
+ */
 function normalizeAngle(angle) {
   let a = angle;
   while (a > Math.PI) a -= 2 * Math.PI;
@@ -419,7 +434,10 @@ function normalizeAngle(angle) {
   return a;
 }
 
-/** İki açı arasındaki en kısa fark (a - b), ±π içinde. */
+/**
+ * İki açı arasındaki en kısa farkı döner (±π içinde).
+ * Doğrudan çıkarma yapılırsa 359° ile 1° arasında 358° fark sanılır; yumuşatma bozulur.
+ */
 function angleDifference(a, b) {
   let diff = a - b;
   while (diff > Math.PI) diff -= 2 * Math.PI;
@@ -427,7 +445,7 @@ function angleDifference(a, b) {
   return diff;
 }
 
-/** Odometri gürültüsünü azaltmak için üstel yumuşatma (EMA) + yaw sarmalama. */
+/** Odometri gürültüsünü azaltmak için üstel yumuşatma; yaw için normalizeAngle + angleDifference şart. */
 function smoothPose(raw, prev) {
   if (!prev) {
     return {
@@ -544,7 +562,7 @@ function drawPlanPath(ctx, planPath, mapMeta, imageObj, scale) {
   ctx.restore();
 }
 
-/** Robot hareket izini yarı saydam gri noktalar olarak çizer (robot ikonunun altında). */
+/** Robot hareket izini çizer; TRAIL_MAX ile nokta sayısı sınırlı — performans için eski noktalar atılır. */
 function drawPositionTrail(ctx, trail, mapMeta, imageObj, imageData, scale) {
   const dotRadius = 1.5 / scale;
 
@@ -565,6 +583,7 @@ function drawPositionTrail(ctx, trail, mapMeta, imageObj, imageData, scale) {
   }
 }
 
+/** Ana harita bileşeni: veri yükleme, odometri dinleme, canvas çizimi ve zoom/pan etkileşimi. */
 const MapView = () => {
   const containerRef = useRef(null);
   const canvasRef = useRef(null);
@@ -590,12 +609,14 @@ const MapView = () => {
   // Canvas boyutu (ResizeObserver ile güncellenir)
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
 
-  // Sol tık sürükleme (pan) durumu — ref ile senkron takip (mouseup stale closure önlenir)
+  // Sol tık sürükleme (pan) — ref ile senkron takip:
+  // useState asenkron güncellenir; mouseup anında isPanning hâlâ false görünüp tıklama sanılabilirdi.
+  // isPanningRef anlık değeri tutar, pan/tıklama ayrımı doğru çalışır.
   const [isPanning, setIsPanning] = useState(false);
   const isPanningRef = useRef(false);
   const lastMousePos = useRef({ x: 0, y: 0 });
   const panStartPos = useRef({ x: 0, y: 0 });
-  const didPanRef = useRef(false);
+  const didPanRef = useRef(false);  // sürükleme mi yoksa saf tıklama mı — ref ile senkron
   const layoutRef = useRef(null);
   const viewResetKeyRef = useRef('');
 
@@ -669,7 +690,7 @@ const MapView = () => {
           }
         }
         const next = [...prev, { x: smoothed.x, y: smoothed.y }];
-        return next.length > TRAIL_MAX ? next.slice(-TRAIL_MAX) : next;
+        return next.length > TRAIL_MAX ? next.slice(-TRAIL_MAX) : next;  // eski noktaları at
       });
     });
 
@@ -808,7 +829,7 @@ const MapView = () => {
     setScale(newScale);
   };
 
-  // ── 3b. Sol tık basılı tutarak pan (kaydırma) + tıklama ──
+  // ── 3b. Sol tık basılı tutarak pan (kaydırma) ──
   const finishPointerInteraction = () => {
     isPanningRef.current = false;
     setIsPanning(false);

@@ -1,6 +1,10 @@
+// Robot durum kartı: bağlantı, meşgul/hazır rozeti, görev ilerlemesi ve son hedef bilgisi.
+// NavigationContext'ten okur; operatör ve mühendis panelinde ortak kullanılır.
+
 import React from 'react';
 import { useNavigation } from '../../context/NavigationContext';
 
+/** Durum özeti kartı — büyük statusText ve kuyruk rozeti gösterir. */
 export default function StatusCard({ activeMap, showMapName = true }) {
   const {
     statusText,

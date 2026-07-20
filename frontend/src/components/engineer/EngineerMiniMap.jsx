@@ -1,3 +1,6 @@
+// Mühendis panelindeki küçük canlı harita — robot konumu, konum işaretleri ve geofence çizimi.
+// Çizim modunda tıklama ile poligon köşesi eklenir; MapView'dan daha basit, sabit boyutlu önizleme.
+
 import React, { useEffect, useRef, useState } from 'react';
 import { Topic } from 'roslib';
 import { useRos } from '../../context/RosContext';
@@ -13,10 +16,12 @@ const DRAW_MAP_WIDTH = 480;
 const POS_SMOOTH_ALPHA = 0.35;
 const YAW_SMOOTH_ALPHA = 0.25;
 
+/** Harita görüntüsünün piksel boyutları. */
 function getImageSize(imageObj) {
   return { width: imageObj.width, height: imageObj.height };
 }
 
+/** Canvas'a sığdırma ölçeği ve ortalama ofseti (döndürülmüş harita için). */
 function getMapFitTransform(imageSize, canvasWidth, canvasHeight) {
   const displayW = imageSize.height;
   const displayH = imageSize.width;
@@ -32,6 +37,7 @@ function getMapFitTransform(imageSize, canvasWidth, canvasHeight) {
   return { fitScale, centerX, centerY, displayW, displayH };
 }
 
+/** Dünya koordinatı (m) → ham harita pikseli. */
 function worldToPixel(worldX, worldY, metadata, imageSize) {
   const pixelX = (worldX - metadata.origin[0]) / metadata.resolution;
   const pixelY = imageSize.height - (worldY - metadata.origin[1]) / metadata.resolution;
@@ -51,6 +57,7 @@ function imagePixelToWorld(pixelX, pixelY, metadata, imageSize) {
   return { x: worldX, y: worldY };
 }
 
+/** Canvas tıklamasını dünya koordinatına çevirir (geofence köşe ekleme için). */
 function canvasToWorld(canvasX, canvasY, mapMeta, imageObj, canvasWidth, canvasHeight) {
   const imageSize = getImageSize(imageObj);
   const { fitScale, centerX, centerY, displayW, displayH } = getMapFitTransform(
@@ -113,6 +120,7 @@ function drawRobotMarker(ctx, x, y, yaw, scale) {
   ctx.restore();
 }
 
+/** Kayıtlı veya taslak geofence poligonunu harita üzerinde çizer. */
 function drawBoundaryPolygon(ctx, vertices, mapMeta, imageSize, scale, { closed = false } = {}) {
   if (!vertices?.length) return;
 
@@ -151,6 +159,7 @@ function drawBoundaryPolygon(ctx, vertices, mapMeta, imageSize, scale, { closed 
   ctx.restore();
 }
 
+/** Mühendis paneli mini harita — canlı robot, konumlar ve sınır çizimi. */
 export default function EngineerMiniMap({
   locations = [],
   boundaryPolygon = null,

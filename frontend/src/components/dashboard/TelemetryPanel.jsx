@@ -1,3 +1,6 @@
+// Debug telemetri kartları — ?debug=1 ile Kontrol Paneli yanında gösterilir.
+// Konum, hız, demo batarya ve pusula; son 30 saniyelik mini grafikler içerir.
+
 import React, { useEffect, useState } from 'react';
 import { LineChart, Line, ResponsiveContainer, XAxis, YAxis } from 'recharts';
 import { useTelemetry } from '../../context/TelemetryContext';
@@ -7,11 +10,13 @@ const HISTORY_WINDOW_MS = 30_000;
 const SPARKLINE_COLOR = '#06A89B';
 const DEMO_BATTERY_PERCENT = 87;
 
+/** 30 saniyeden eski grafik noktalarını atar — bellek ve çizim yükünü sınırlar. */
 function pruneHistory(entries) {
   const cutoff = Date.now() - HISTORY_WINDOW_MS;
   return entries.filter((entry) => entry.t >= cutoff);
 }
 
+/** Telemetri kart başlığındaki küçük ikon sarmalayıcısı. */
 function CardIcon({ children }) {
   return (
     <span className="telemetry-card__icon" aria-hidden="true">
@@ -73,6 +78,7 @@ function TelemetryCardTitle({ icon, children }) {
   );
 }
 
+/** Son 30 sn hız/konum mini çizgi grafiği. */
 function Sparkline({ data }) {
   if (data.length < 2) {
     return <div className="sparkline sparkline--empty" aria-hidden="true" />;
@@ -98,6 +104,7 @@ function Sparkline({ data }) {
   );
 }
 
+/** Pusula görseli — robot yaw açısını derece olarak gösterir. */
 function CompassWidget({ yawRad }) {
   const yawDeg = yawRad != null
     ? ((normalizeAngle(yawRad) * 180) / Math.PI).toFixed(1)
@@ -125,6 +132,7 @@ function CompassWidget({ yawRad }) {
   );
 }
 
+/** Debug telemetri yan paneli; TelemetryContext'ten canlı pose/velocity okur. */
 export default function TelemetryPanel({ debugMode = false }) {
   const { pose, velocity } = useTelemetry();
   const yawRad = pose?.yaw ?? null;

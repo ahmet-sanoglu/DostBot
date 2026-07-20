@@ -1,5 +1,9 @@
+// Geofence (geçilebilir alan sınırı) çizim ve kaydetme kontrolleri.
+// EngineerMiniMap ile birlikte çalışır; operatör hedefleri bu poligon içinde olmalıdır.
+
 import React from 'react';
 
+/** Sınır çizme modu, kaydetme ve silme butonlarını yönetir. */
 export default function BoundarySettings({
   boundaryPolygon,
   drawMode,

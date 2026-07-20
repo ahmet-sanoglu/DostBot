@@ -1,3 +1,7 @@
+// Operatör panelindeki sanal joystick — parmak/mouse ile manuel robot sürüşü.
+// Hız komutlarını /cmd_vel/joy ROS topic'ine gönderir (PS4 kolu ile aynı kanal).
+// Bırakınca sıfır hız (deadman) gönderilir; robot kendi başına hareket etmesin diye.
+
 import React, { useEffect, useRef, useState } from 'react';
 import nipplejs from 'nipplejs';
 import { Topic } from 'roslib';
@@ -8,17 +12,16 @@ import { CMD_VEL_JOY_TOPIC } from '../utils/rosTopics';
 const JOYSTICK_SIZE = 100;
 const MAX_LINEAR = 0.5;   // m/s
 const MAX_ANGULAR = 1.0;  // rad/s
-const PUBLISH_INTERVAL_MS = 100; // 10 Hz
+const PUBLISH_INTERVAL_MS = 100; // 10 Hz — saniyede 10 kez hız komutu gönderilir
 
-/** Değeri [min, max] aralığına sıkıştırır */
+/** Değeri [min, max] aralığına sıkıştırır. */
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
 /**
- * nipplejs move verisinden linear.x ve angular.z hesaplar.
- * Formül: linear = force·cos(angle), angular = force·sin(angle)
- * nipplejs açısı sağdan (0 rad) başlar; ileri = yukarı olması için π/2 kaydırılır.
+ * nipplejs move verisinden linear.x (ileri/geri) ve angular.z (dönüş) hesaplar.
+ * nipplejs açısı sağdan (0 rad) başlar; ekranda ileri = yukarı olması için π/2 kaydırılır.
  */
 function velocitiesFromJoystick(data) {
   const force = Math.min(data.force, 1);
@@ -30,6 +33,7 @@ function velocitiesFromJoystick(data) {
   return { linearX, angularZ };
 }
 
+/** Sanal joystick bileşeni — nipplejs kütüphanesi dokunmatik/sürükleme hareketini yönetir. */
 const Joystick = () => {
   const zoneRef = useRef(null);
   const { ros } = useRos();
@@ -37,8 +41,10 @@ const Joystick = () => {
   const [isActive, setIsActive] = useState(false);
   const [displaySpeed, setDisplaySpeed] = useState({ linear: 0, angular: 0 });
 
+  // useRef: hız değerini render tetiklemeden saklar; 10 Hz interval bu ref'i okuyarak ROS'a yazar.
   const velocityRef = useRef({ linearX: 0, angularZ: 0 });
 
+  // nipplejs joystick UI'sini zoneRef elemanına bağlar (mount/unmount yaşam döngüsü).
   useEffect(() => {
     const zone = zoneRef.current;
     if (!zone) return;
@@ -62,8 +68,8 @@ const Joystick = () => {
       setDisplaySpeed({ linear: linearX, angular: angularZ });
     };
 
+    // Deadman güvenlik: parmak/joystick bırakılınca hız sıfırlanır — robot kendi başına gitmesin.
     const handleEnd = () => {
-      // Deadman: parmak bırakılınca hız sıfırlanır — robot kendi başına hareket etmesin diye.
       velocityRef.current = { linearX: 0, angularZ: 0 };
       setIsActive(false);
       setDisplaySpeed({ linear: 0, angular: 0 });
@@ -81,10 +87,10 @@ const Joystick = () => {
     };
   }, []);
 
+  // ROS Topic: /cmd_vel/joy — "joy" PS4 gamepad ile aynı kanal adı; robot twist_mux ikisini birleştirir.
   useEffect(() => {
     if (!ros) return;
 
-    // PS4 kolu ile aynı kanal; robot tarafında twist_mux bu topic'i birleştirir.
     const cmdVelTopic = new Topic({
       ros,
       name: CMD_VEL_JOY_TOPIC,
@@ -106,7 +112,7 @@ const Joystick = () => {
 
     return () => {
       clearInterval(intervalId);
-      cmdVelTopic.publish({
+      cmdVelTopic.publish({  // bileşen kapanırken de sıfır hız — güvenlik
         linear: { x: 0, y: 0, z: 0 },
         angular: { x: 0, y: 0, z: 0 },
       });
@@ -116,6 +122,10 @@ const Joystick = () => {
 
   return (
     <div className="manual-drive-controls">
+      {/*
+        .joystick-zone CSS'te position: relative olmalı — nipplejs iç elemanları absolute konumlar;
+        relative olmayan ata eleman varsa knob ekranda kayar (DevTools ile tespit edildi).
+      */}
       <div
         ref={zoneRef}
         className={`joystick-zone${isActive ? ' active' : ''}`}

@@ -1,4 +1,10 @@
-/** Yasaklı bölge: dikdörtgen X/Y aralığı (mühendis paneli veri yapısı). */
+// Mühendis panelinde tanımlanan dikdörtgen yasak bölgeler için nokta kontrolü.
+// Geofence poligonundan farklı: burada min/max X/Y ile basit dikdörtgen aralığı kullanılır.
+
+/**
+ * Dünya koordinatı verilen yasak dikdörtgenlerden birinin içinde mi?
+ * zone.minX/maxX/minY/maxY veya alternatif xMin/xMax alan adlarını kabul eder.
+ */
 export function isPointInForbiddenZone(worldX, worldY, forbiddenZones) {
   if (!forbiddenZones?.length) return false;
 

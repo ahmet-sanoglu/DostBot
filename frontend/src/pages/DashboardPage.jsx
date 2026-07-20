@@ -1,3 +1,6 @@
+// Operatör Kontrol Paneli ana sayfası — sol harita, sağ kontrol kartları.
+// Görev başlatmadan önce isWorldGoalPassable ile hedef doğrulanır.
+
 import React, { useCallback, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import MapView from '../components/MapView';
@@ -7,6 +10,7 @@ import { useActiveMap } from '../hooks/useActiveMap';
 import { useMapOccupancy } from '../hooks/useMapOccupancy';
 import { useNavigation } from '../context/NavigationContext';
 
+/** Kontrol Paneli (/) — harita + görev/joystick paneli bir arada. */
 export default function DashboardPage() {
   const [searchParams] = useSearchParams();
   const showDebugTelemetry = searchParams.get('debug') === '1';
@@ -28,6 +32,13 @@ export default function DashboardPage() {
   } = useNavigation();
   const [showInvalidGoalPopup, setShowInvalidGoalPopup] = useState(false);
 
+  /**
+   * Görev Başlat öncesi geofence zinciri (isWorldGoalPassable / mapPassability.js):
+   * 1) Occupancy piksel — duvar/engel/bilinmeyen gri alan elenir (harita verisi)
+   * 2) Geofence poligonu — mühendisin çizdiği sınır dışı elenir
+   * 3) Yasak dikdörtgen — forbidden_zones.json ile tanımlı bölgeler elenir
+   * Sıra: ucuz harita kontrolü önce; mühendis kısıtları en sonda uygulanır.
+   */
   const handleStartTask = useCallback((task) => {
     if (!mapReady) return false;
 

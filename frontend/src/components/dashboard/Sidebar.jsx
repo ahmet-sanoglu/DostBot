@@ -1,3 +1,6 @@
+// Sol dikey menü — Kontrol Paneli ve Mühendis Paneli arasında geçiş sağlar.
+// Henüz tamamlanmamış öğeler (Görev Geçmişi, Ayarlar) devre dışı buton olarak gösterilir.
+
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
@@ -8,11 +11,13 @@ const SIDEBAR_ITEMS = [
   { id: 'engineer', icon: '🛠️', label: 'Mühendis Paneli', path: '/muhendis', openInNewTab: true },
 ];
 
+/** Menü öğesinin aktif rotada olup olmadığını kontrol eder. */
 function isItemActive(pathname, item) {
   if (!item.path) return false;
   return pathname === item.path;
 }
 
+/** Sol kenar navigasyon menüsü. */
 export default function Sidebar() {
   const { pathname } = useLocation();
 

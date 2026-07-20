@@ -1,3 +1,7 @@
+// Robot ile konuşan tek WebSocket bağlantısını tüm arayüze paylaşır.
+// rosbridge (localhost:9090) üzerinden ROS topic'lerine abone olur veya mesaj gönderir.
+// Bağlantı durumu ve Nav2'nin planladığı rota (/plan) burada tutulur.
+
 import React, {
   createContext,
   useCallback,
@@ -11,21 +15,25 @@ export const ROSBRIDGE_URL = 'ws://localhost:9090';
 export const PLAN_TOPIC = '/plan';
 export const ROS_CONNECTED_STATUS = 'ROS bağlantısı kuruldu';
 
+// Context: alt bileşenlere veri taşıyan React mekanizması; prop drilling olmadan ros/status paylaşılır.
 const RosContext = createContext(null);
 
 /**
- * Tek bir rosbridge WebSocket bağlantısını tüm bileşenlerle paylaşır.
- * /plan topic'inden gelen rota da burada tutulur.
+ * Uygulama açıldığında rosbridge'e bağlanır; kapanınca bağlantıyı keser.
+ * /plan topic'inden gelen rota noktalarını haritada çizmek için planPath state'inde tutar.
  */
 export function RosProvider({ children, url = ROSBRIDGE_URL }) {
+  // useState: ekranda gösterilecek ve değişince arayüzü yenileyen değerler.
   const [ros, setRos] = useState(null);
   const [status, setStatus] = useState('Bağlanıyor...');
   const [planPath, setPlanPath] = useState([]);
 
+  // useCallback: fonksiyon referansını sabit tutar; alt bileşenler gereksiz yeniden render olmaz.
   const clearPlanPath = useCallback(() => {
     setPlanPath([]);
   }, []);
 
+  // useEffect: bileşen mount olduğunda rosbridge bağlantısını kurar, unmount'ta kapatır.
   useEffect(() => {
     const instance = new Ros({ url });
 
@@ -44,6 +52,7 @@ export function RosProvider({ children, url = ROSBRIDGE_URL }) {
     };
   }, [url]);
 
+  // ROS bağlandığında /plan topic'ine abone ol; Nav2 yeni rota planladıkça planPath güncellenir.
   useEffect(() => {
     if (!ros) {
       setPlanPath([]);
@@ -74,6 +83,7 @@ export function RosProvider({ children, url = ROSBRIDGE_URL }) {
   );
 }
 
+/** RosProvider dışında kullanılırsa hata fırlatır — bağlantı bilgisine güvenli erişim sağlar. */
 export function useRos() {
   const context = useContext(RosContext);
   if (!context) {

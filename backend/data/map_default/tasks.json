@@ -31,5 +31,17 @@
         "yaw": 0.0
       }
     ]
+  },
+  {
+    "id": "task_66e3ae31",
+    "name": "Su Deposu",
+    "locationId": "loc_042429a0",
+    "steps": [
+      {
+        "x": 7.8,
+        "y": -2.5,
+        "yaw": 0.0
+      }
+    ]
   }
 ]

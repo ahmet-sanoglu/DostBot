@@ -1,3 +1,6 @@
+// Mühendis Paneli ana sayfası — PIN korumalı konum/görev/sınır yönetimi.
+// PIN doğrulandıktan sonra harita verileri yüklenir; mini haritada geofence çizilebilir.
+
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   createMapLocation,
@@ -20,10 +23,12 @@ import EngineerMiniMap from '../components/engineer/EngineerMiniMap';
 import EngineerPinGate, { useEngineerAuth } from '../components/engineer/EngineerPinGate';
 import MapSelectorDropdown from '../components/engineer/MapSelectorDropdown';
 
+/** Yaw radyanını derece metnine çevirir (konum listesinde gösterim). */
 function formatYawDegrees(yaw) {
   return ((yaw * 180) / Math.PI).toFixed(1);
 }
 
+/** Mühendis paneli (/muhendis) — konum, görev, geofence CRUD. */
 export default function EngineerPage() {
   const { authenticated, setAuthenticated } = useEngineerAuth();
   const [activeMap, setActiveMap] = useState(null);
@@ -46,6 +51,7 @@ export default function EngineerPage() {
   const [boundarySaving, setBoundarySaving] = useState(false);
   const [boundaryError, setBoundaryError] = useState('');
 
+  /** Aktif haritanın konum, görev ve sınır verilerini backend'den yeniden yükler. */
   const loadMapData = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
@@ -73,6 +79,7 @@ export default function EngineerPage() {
     }
   }, [authenticated, loadMapData]);
 
+  /** Yeni konumu backend'e kaydeder; backend otomatik tek adımlı görev de oluşturur. */
   const handleSaveLocation = async (location) => {
     if (!activeMap) return false;
     setLocationSaving(true);
@@ -90,6 +97,7 @@ export default function EngineerPage() {
     }
   };
 
+  /** Konumu siler; locationId'ye bağlı otomatik tek adımlı görev de backend'de silinir. */
   const handleDeleteLocation = async (locationId) => {
     if (!activeMap) return;
     try {
@@ -100,6 +108,7 @@ export default function EngineerPage() {
     }
   };
 
+  /** Manuel çok adımlı görevi tasks.json'a ekler (en az 2 konum). */
   const handleSaveTask = async (task) => {
     if (!activeMap) return false;
     setTaskSaving(true);
@@ -117,6 +126,7 @@ export default function EngineerPage() {
     }
   };
 
+  /** Mini haritada geofence poligonu çizmeye başlar. */
   const handleStartBoundaryDraw = () => {
     setBoundaryError('');
     setBoundaryDrawMode(true);
@@ -124,16 +134,19 @@ export default function EngineerPage() {
     setBoundaryDraftClosed(false);
   };
 
+  /** Çizim modunda haritaya tıklanan noktayı taslak köşe listesine ekler. */
   const handleBoundaryVertexAdd = (point) => {
     setBoundaryDraft((prev) => [...prev, { x: point.x, y: point.y }]);
   };
 
+  /** En az 3 köşe varsa çizimi kapatır; Kaydet butonu görünür hale gelir. */
   const handleFinishBoundaryDraw = () => {
     if (boundaryDraft.length < 3) return;
     setBoundaryDrawMode(false);
     setBoundaryDraftClosed(true);
   };
 
+  /** Çizim modunu iptal eder, taslak köşeleri temizler. */
   const handleCancelBoundaryDraw = () => {
     setBoundaryDrawMode(false);
     setBoundaryDraft([]);
@@ -141,6 +154,7 @@ export default function EngineerPage() {
     setBoundaryError('');
   };
 
+  /** Taslak poligonu boundary.json olarak backend'e yazar. */
   const handleSaveBoundary = async () => {
     if (!activeMap || boundaryDraft.length < 3) return;
     setBoundarySaving(true);
@@ -157,6 +171,7 @@ export default function EngineerPage() {
     }
   };
 
+  /** Kayıtlı geofence sınırını backend'den kaldırır. */
   const handleDeleteBoundary = async () => {
     if (!activeMap) return;
     setBoundarySaving(true);
@@ -263,16 +278,22 @@ export default function EngineerPage() {
               <span className="panel-card__icon">🎯</span>
               Görevler
             </div>
-            <button
-              type="button"
-              className="autonomous-btn autonomous-btn--small"
-              onClick={() => {
-                setTaskModalError('');
-                setTaskModalOpen(true);
-              }}
-            >
-              + Ekle
-            </button>
+            <div className="engineer-list__header-actions">
+              <p className="engineer-list__hint">
+                Birden fazla konumu sıralı bir rotada birleştirmek için kullanın.
+                Tek nokta görevleri, konum eklendiğinde otomatik oluşturulur.
+              </p>
+              <button
+                type="button"
+                className="autonomous-btn autonomous-btn--small"
+                onClick={() => {
+                  setTaskModalError('');
+                  setTaskModalOpen(true);
+                }}
+              >
+                + Ekle
+              </button>
+            </div>
           </div>
 
           {loading ? (

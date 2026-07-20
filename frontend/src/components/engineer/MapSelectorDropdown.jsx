@@ -1,9 +1,14 @@
+// Mühendis paneli üstündeki harita seçici — şu an yalnızca aktif haritayı gösterir.
+// "Yeni Harita Ekle" gelecek özellik olarak devre dışı bırakıldı.
+
 import React, { useEffect, useRef, useState } from 'react';
 
+/** Aktif harita adını gösteren açılır menü (çoklu harita desteği için iskelet). */
 export default function MapSelectorDropdown({ activeMap }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
 
+  /** Menü dışına tıklanınca kapat — dropdown UX standardı. */
   useEffect(() => {
     if (!open) return undefined;
 

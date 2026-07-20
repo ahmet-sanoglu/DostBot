@@ -1,6 +1,11 @@
+// Mühendis paneli giriş kapısı — PIN doğrulaması yapmadan sayfa içeriği gösterilmez.
+// NOT: Bu gerçek bir kimlik doğrulama (auth) sistemi değildir; oturum/token/şifreleme içermez.
+// Yalnızca yanlışlıkla veri silmeyi/değiştirmeyi engelleyen basit bir PIN katmanıdır.
+
 import React, { useState } from 'react';
 import { getStoredAdminPin, storeAdminPin, verifyAdminPin } from '../../utils/adminApi';
 
+/** PIN giriş formu; doğrulama başarılıysa onAuthenticated çağrılır. */
 export default function EngineerPinGate({ onAuthenticated }) {
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
@@ -50,6 +55,7 @@ export default function EngineerPinGate({ onAuthenticated }) {
   );
 }
 
+/** Oturum boyunca PIN'in sessionStorage'da kalıp kalmadığını takip eder. */
 export function useEngineerAuth() {
   const [authenticated, setAuthenticated] = useState(() => Boolean(getStoredAdminPin()));
 

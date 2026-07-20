@@ -1,3 +1,7 @@
+// Backend'den aktif harita ve ona bağlı tüm verileri (konum, görev, sınır, yasak bölge) yükler.
+// Operatör ve mühendis paneli sayfa açıldığında bu hook ile harita verisini alır.
+// Tek bir useEffect içinde paralel istekler atılır; sonuç state'e yazılır.
+
 import { useEffect, useState } from 'react';
 import {
   fetchActiveMap,
@@ -7,6 +11,10 @@ import {
   fetchMapTasks,
 } from '../utils/mapApi';
 
+/**
+ * Aktif harita kimliğini ve ilgili JSON verilerini backend API'den çeker.
+ * loading/error bayrakları ile arayüzde yükleme ve hata durumu gösterilir.
+ */
 export function useActiveMap() {
   const [activeMap, setActiveMap] = useState(null);
   const [locations, setLocations] = useState([]);
@@ -16,8 +24,9 @@ export function useActiveMap() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  // useEffect: bileşen mount olduğunda bir kez veri yükler; unmount'ta iptal bayrağı koyar.
   useEffect(() => {
-    let cancelled = false;
+    let cancelled = false;  // hızlı sayfa değişiminde eski istek sonucu state'e yazılmasın
 
     async function load() {
       setLoading(true);
@@ -27,6 +36,7 @@ export function useActiveMap() {
         const map = await fetchActiveMap();
         if (cancelled) return;
 
+        // Promise.all: dört isteği paralel atar; hepsi bitince tek seferde state güncellenir.
         const [mapLocations, mapTasks, mapForbiddenZones, mapBoundary] = await Promise.all([
           fetchMapLocations(map.id),
           fetchMapTasks(map.id),

@@ -53,6 +53,8 @@
 
   /* TopBar min-height — used for side panel scroll bounds */
   --layout-top-bar-height: 96px;
+
+  --color-overlay: rgba(0, 0, 0, 0.4);
 }
 
 html,

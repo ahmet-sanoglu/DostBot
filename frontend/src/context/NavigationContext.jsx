@@ -1,3 +1,7 @@
+// Operatör panelindeki navigasyon akışını yönetir: hedef gönderme, görev kuyruğu, durum metni.
+// Nav2'ye tek seferde bir hedef gider; çok adımlı görevlerin kalan adımları sırayla bekletilir.
+// Acil Dur, görev iptali ve "Son Olaylar" panelindeki mesajlar da buradan yönetilir.
+
 import React, {
   createContext,
   useCallback,
@@ -10,11 +14,12 @@ import React, {
 import { ROS_CONNECTED_STATUS, useRos } from './RosContext';
 import { cancelActiveNavigationGoal, publishNavigationGoal } from '../utils/rosNavigation';
 
-const NAV_BUSY_MS = 8000;
+const NAV_BUSY_MS = 8000;  // Nav2 yanıt bekleme süresi; sonrasında queueBusy false olur
 const MAX_EVENTS = 10;
 
 const NavigationContext = createContext(null);
 
+/** Son Olaylar panelinde gösterilecek saat damgasını Türkçe formatta üretir. */
 function formatEventTime(date = new Date()) {
   return date.toLocaleTimeString('tr-TR', {
     hour: '2-digit',
@@ -23,6 +28,7 @@ function formatEventTime(date = new Date()) {
   });
 }
 
+/** Durum kartında gösterilecek metni bağlantı, acil dur ve görev ilerlemesine göre üretir. */
 export function getStatusText({ isConnected, emergencyStopped, queueBusy, activeTaskProgress }) {
   if (!isConnected) {
     return '⚠️ Bağlantı Yok';
@@ -39,6 +45,7 @@ export function getStatusText({ isConnected, emergencyStopped, queueBusy, active
   return '✅ Hazır';
 }
 
+/** Görev JSON'undaki adımları geçerli koordinatlarla filtreler; eksik alanları atlar. */
 function normalizeTaskSteps(task) {
   if (!Array.isArray(task?.steps)) return [];
   return task.steps
@@ -52,23 +59,30 @@ function normalizeTaskSteps(task) {
 
 export function NavigationProvider({ children }) {
   const { ros, status, clearPlanPath } = useRos();
+
   const [lastSentGoal, setLastSentGoal] = useState(null);
   const [queueBusy, setQueueBusy] = useState(false);
   const [showBusyPopup, setShowBusyPopup] = useState(false);
   const [recentEvents, setRecentEvents] = useState([]);
   const [activeTaskProgress, setActiveTaskProgress] = useState(null);
   const [emergencyStopped, setEmergencyStopped] = useState(false);
+
+  // useRef: render'lar arasında değeri saklar; değişince ekranı yeniden çizmez (timer id'leri için ideal).
   const busyTimerRef = useRef(null);
   const estopResetTimerRef = useRef(null);
   const wasBusyRef = useRef(false);
+  // estopTriggeredRef: Acil Dur sonrası queueBusy false olunca yanlışlıkla "görev tamamlandı"
+  // event'i yazılmasını önler — aksi halde iptal edilmiş görev tamamlanmış gibi görünürdü.
   const estopTriggeredRef = useRef(false);
   const wasConnectedRef = useRef(status === ROS_CONNECTED_STATUS);
   const connectionInitializedRef = useRef(false);
+  // pendingStepsRef: çok adımlı görevde henüz gönderilmemiş adımlar; UI'da gösterilmez, kuyrukta bekler.
   const pendingStepsRef = useRef([]);
   const activeTaskRef = useRef(null);
 
   const isConnected = status === ROS_CONNECTED_STATUS;
 
+  /** Son Olaylar paneline en fazla MAX_EVENTS kayıt ekler; en yenisi üstte görünür. */
   const addEvent = useCallback((message) => {
     const entry = {
       id: crypto.randomUUID(),
@@ -78,6 +92,7 @@ export function NavigationProvider({ children }) {
     setRecentEvents((prev) => [entry, ...prev].slice(0, MAX_EVENTS));
   }, []);
 
+  /** Nav2'ye hedef gönderir, meşgul bayrağını açar ve NAV_BUSY_MS sonra otomatik kapatır. */
   const dispatchGoal = useCallback((goal, sourceLabel) => {
     const sent = publishNavigationGoal(ros, goal);
     if (!sent) return false;
@@ -97,6 +112,7 @@ export function NavigationProvider({ children }) {
     return true;
   }, [clearPlanPath, ros]);
 
+  /** Tek hedef gönderir; robot meşgulse popup gösterir ve reddeder. */
   const sendNavigationGoal = useCallback((goal, sourceLabel) => {
     if (queueBusy || pendingStepsRef.current.length > 0) {
       setShowBusyPopup(true);
@@ -143,6 +159,7 @@ export function NavigationProvider({ children }) {
     }, 4000);
   }, [clearPlanPath]);
 
+  /** Operatör panelinden seçilen görevi başlatır; çok adımlıysa ilk adımı gönderir, gerisini kuyruğa alır. */
   const startTask = useCallback((task) => {
     if (queueBusy || pendingStepsRef.current.length > 0) {
       setShowBusyPopup(true);
@@ -186,7 +203,7 @@ export function NavigationProvider({ children }) {
         clearPlanPath();
         addEvent('Acil dur — navigasyon durduruldu');
         wasBusyRef.current = queueBusy;
-        return;
+        return;  // acil dur — sıradaki adım gönderilmesin
       }
 
       clearPlanPath();
@@ -195,7 +212,7 @@ export function NavigationProvider({ children }) {
       const activeTask = activeTaskRef.current;
 
       if (pending.length > 0 && activeTask) {
-        const nextStep = pending.shift();
+        const nextStep = pending.shift();  // kuyruktan bir sonraki adımı al
         const currentStep = activeTask.totalSteps - pending.length;
         const progress = {
           ...activeTask,
@@ -221,6 +238,7 @@ export function NavigationProvider({ children }) {
     wasBusyRef.current = queueBusy;
   }, [addEvent, clearPlanPath, dispatchGoal, queueBusy]);
 
+  // ROS bağlantısı kesilip geri geldiğinde Son Olaylar paneline kayıt düşer.
   useEffect(() => {
     if (!connectionInitializedRef.current) {
       connectionInitializedRef.current = true;
@@ -236,6 +254,7 @@ export function NavigationProvider({ children }) {
     wasConnectedRef.current = isConnected;
   }, [addEvent, isConnected]);
 
+  // Bileşen kaldırılırken bekleyen timer'ları temizle (bellek sızıntısı önlemi).
   useEffect(() => () => {
     if (busyTimerRef.current) {
       window.clearTimeout(busyTimerRef.current);
@@ -245,11 +264,13 @@ export function NavigationProvider({ children }) {
     }
   }, []);
 
+  // useMemo: statusText yalnızca bağımlılıklar değişince yeniden hesaplanır.
   const statusText = useMemo(
     () => getStatusText({ isConnected, emergencyStopped, queueBusy, activeTaskProgress }),
     [isConnected, emergencyStopped, queueBusy, activeTaskProgress],
   );
 
+  // useMemo: Context value nesnesinin referansını sabit tutar; gereksiz alt bileşen render'ını azaltır.
   const value = useMemo(
     () => ({
       lastSentGoal,
@@ -287,6 +308,7 @@ export function NavigationProvider({ children }) {
   );
 }
 
+/** NavigationProvider dışında kullanılırsa hata fırlatır. */
 export function useNavigation() {
   const context = useContext(NavigationContext);
   if (!context) {

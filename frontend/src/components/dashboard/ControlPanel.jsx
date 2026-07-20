@@ -1,9 +1,14 @@
+// Operatör panelinin sağ sütunu: durum, görev listesi, joystick ve son olaylar kartlarını bir araya getirir.
+// CSS'te .control-panel overflow-y: auto ile kaydırılabilir — kartlar ekranı aşınca
+// "Son Olaylar" görünür alanın dışında kalmasın diye (sayfa değil, panel içi scroll).
+
 import React from 'react';
 import { INVALID_GOAL_MESSAGE } from '../../utils/mapPassability';
 import Joystick from '../Joystick';
 import RecentEventsPanel from './RecentEventsPanel';
 import StatusCard from './StatusCard';
 
+/** Görev adım sayısını operatör dostu metne çevirir. */
 function formatStepCount(steps) {
   const count = Array.isArray(steps) ? steps.length : 0;
   if (count === 0) return 'Adım yok';
@@ -11,6 +16,10 @@ function formatStepCount(steps) {
   return `${count} adım`;
 }
 
+/**
+ * Sağ kontrol paneli — harita yanında duran kartların kapsayıcısı.
+ * Geofence doğrulaması burada değil; Başlat tıklanınca DashboardPage.onStartTask çalışır.
+ */
 export default function ControlPanel({
   activeMap,
   tasks,

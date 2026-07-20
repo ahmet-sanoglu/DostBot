@@ -1,3 +1,6 @@
+// Üst şerit: logo, sayfa başlığı, ROS bağlantı göstergesi, demo batarya ve Acil Dur butonu.
+// Tüm sayfalarda (Kontrol + Mühendis) ortak görünür.
+
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Topic } from 'roslib';
@@ -7,6 +10,10 @@ import { CMD_VEL_JOY_TOPIC } from '../../utils/rosTopics';
 import logo from '../../assets/dost-tarim-logo.png';
 const DEMO_BATTERY_PERCENT = 87;
 
+/**
+ * Acil Dur: hem aktif Nav2 görevini iptal eder (emergencyStopNavigation)
+ * hem joystick/manuel hızı sıfırlar (/cmd_vel/joy'a 0 Twist gönderir).
+ */
 function EmergencyStopButton() {
   const { ros } = useRos();
   const { emergencyStopNavigation } = useNavigation();
@@ -37,6 +44,7 @@ function EmergencyStopButton() {
   );
 }
 
+/** Demo batarya göstergesi — gerçek ROS batarya topic'i henüz bağlı değil. */
 function TopBarBattery() {
   return (
     <div className="top-bar__battery" aria-label={`Batarya ${DEMO_BATTERY_PERCENT}%`}>
@@ -46,6 +54,7 @@ function TopBarBattery() {
   );
 }
 
+/** Üst navigasyon çubuğu — marka, bağlantı durumu ve acil dur. */
 export default function TopBar() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
