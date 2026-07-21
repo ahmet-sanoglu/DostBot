@@ -54,6 +54,11 @@
   /* TopBar min-height — used for side panel scroll bounds */
   --layout-top-bar-height: 96px;
 
+  /* Kontrol Paneli — harita / sağ panel oranı (~68% / ~32%) */
+  --layout-panel-min-width: 380px;
+  --layout-panel-max-width: 400px;
+  --layout-panel-width: clamp(var(--layout-panel-min-width), 32%, var(--layout-panel-max-width));
+
   --color-overlay: rgba(0, 0, 0, 0.4);
 }
 

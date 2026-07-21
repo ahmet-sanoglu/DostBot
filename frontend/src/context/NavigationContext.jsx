@@ -13,6 +13,7 @@ import React, {
 } from 'react';
 import { ROS_CONNECTED_STATUS, useRos } from './RosContext';
 import { cancelActiveNavigationGoal, publishNavigationGoal } from '../utils/rosNavigation';
+import { startCoverageTask } from '../utils/coverageAction';
 
 const NAV_BUSY_MS = 8000;  // Nav2 yanıt bekleme süresi; sonrasında queueBusy false olur
 const MAX_EVENTS = 10;
@@ -28,13 +29,16 @@ function formatEventTime(date = new Date()) {
   });
 }
 
-/** Durum kartında gösterilecek metni bağlantı, acil dur ve görev ilerlemesine göre üretir. */
-export function getStatusText({ isConnected, emergencyStopped, queueBusy, activeTaskProgress }) {
+/** Durum kartında gösterilecek metni bağlantı, acil dur, coverage ve görev ilerlemesine göre üretir. */
+export function getStatusText({ isConnected, emergencyStopped, coverageStatus, queueBusy, activeTaskProgress }) {
   if (!isConnected) {
     return '⚠️ Bağlantı Yok';
   }
   if (emergencyStopped) {
     return '⛔ Durduruldu';
+  }
+  if (coverageStatus) {
+    return coverageStatus;
   }
   if (queueBusy && activeTaskProgress) {
     return `🎯 ${activeTaskProgress.taskName} - Adım ${activeTaskProgress.currentStep}/${activeTaskProgress.totalSteps}`;
@@ -66,6 +70,7 @@ export function NavigationProvider({ children }) {
   const [recentEvents, setRecentEvents] = useState([]);
   const [activeTaskProgress, setActiveTaskProgress] = useState(null);
   const [emergencyStopped, setEmergencyStopped] = useState(false);
+  const [coverageStatus, setCoverageStatus] = useState(null);
 
   // useRef: render'lar arasında değeri saklar; değişince ekranı yeniden çizmez (timer id'leri için ideal).
   const busyTimerRef = useRef(null);
@@ -74,6 +79,8 @@ export function NavigationProvider({ children }) {
   // estopTriggeredRef: Acil Dur sonrası queueBusy false olunca yanlışlıkla "görev tamamlandı"
   // event'i yazılmasını önler — aksi halde iptal edilmiş görev tamamlanmış gibi görünürdü.
   const estopTriggeredRef = useRef(false);
+  // skipNextIdleEventRef: coverage gibi finalAction sonrası gereksiz "Görev tamamlandı" event'ini atlar.
+  const skipNextIdleEventRef = useRef(false);
   const wasConnectedRef = useRef(status === ROS_CONNECTED_STATUS);
   const connectionInitializedRef = useRef(false);
   // pendingStepsRef: çok adımlı görevde henüz gönderilmemiş adımlar; UI'da gösterilmez, kuyrukta bekler.
@@ -143,6 +150,8 @@ export function NavigationProvider({ children }) {
     pendingStepsRef.current = [];
     activeTaskRef.current = null;
     setActiveTaskProgress(null);
+    setCoverageStatus(null);
+    skipNextIdleEventRef.current = false;
     clearPlanPath();
 
     if (estopResetTimerRef.current) {
@@ -175,7 +184,10 @@ export function NavigationProvider({ children }) {
       totalSteps: steps.length,
     };
 
-    activeTaskRef.current = progress;
+    activeTaskRef.current = {
+      ...progress,
+      finalAction: task.finalAction,
+    };
     setActiveTaskProgress(progress);
     pendingStepsRef.current = steps.length > 1 ? steps.slice(1) : [];
 
@@ -194,10 +206,41 @@ export function NavigationProvider({ children }) {
     return sent;
   }, [addEvent, dispatchGoal, queueBusy]);
 
+  /** Tüm adımlar bittikten sonra "Toprağı Sür" finalAction'ını ROS coverage action ile başlatır. */
+  const runFinalActionTill = useCallback(() => {
+    setActiveTaskProgress(null);
+    setQueueBusy(true);
+    wasBusyRef.current = true;
+
+    startCoverageTask(ros, {
+      onFeedback: (distanceRemaining, estimatedSeconds) => {
+        const distText = distanceRemaining != null
+          ? `${Number(distanceRemaining).toFixed(1)} m`
+          : '—';
+        const secText = estimatedSeconds != null
+          ? `~${Math.round(estimatedSeconds)} sn`
+          : '—';
+        setCoverageStatus(`🌱 Toprak sürülüyor — kalan: ${distText}, ${secText}`);
+      },
+      onResult: (success, message) => {
+        setCoverageStatus(null);
+        skipNextIdleEventRef.current = true;
+        setQueueBusy(false);
+        addEvent(success ? 'Toprak sürme tamamlandı' : message);
+      },
+    });
+  }, [addEvent, ros]);
+
   // Çok adımlı görevler: Nav2 aynı anda tek hedef işler; kalan adımlar pendingStepsRef'te bekler.
   // Meşgulken yeni görev reddedilir; mevcut adım bitince (timer) sıradaki otomatik dispatchGoal ile gider.
   useEffect(() => {
     if (wasBusyRef.current && !queueBusy) {
+      if (skipNextIdleEventRef.current) {
+        skipNextIdleEventRef.current = false;
+        wasBusyRef.current = queueBusy;
+        return;
+      }
+
       if (estopTriggeredRef.current) {
         estopTriggeredRef.current = false;
         clearPlanPath();
@@ -227,16 +270,32 @@ export function NavigationProvider({ children }) {
         addEvent(`Adım ${currentStep}/${progress.totalSteps}: ${progress.taskName}`);
       } else if (activeTask) {
         addEvent(`${activeTask.taskName} tamamlandı`);
+
+        // Navigasyon adımları bitti — görev tanımındaki finalAction'a göre sonraki davranış:
+        // wait → hiçbir şey (robot hazır); till → coverage ROS akışı;
+        // goto_charge / goto_base → henüz bağlanmadı, Son Olaylar'a bilgi notu
+        const finalActionType = activeTask.finalAction?.type || 'wait';
         activeTaskRef.current = null;
         setActiveTaskProgress(null);
         pendingStepsRef.current = [];
+
+        if (finalActionType === 'till') {
+          runFinalActionTill();
+        } else if (finalActionType === 'goto_charge') {
+          console.warn('[finalAction] goto_charge henüz bağlanmadı — mühendisten action/servis bilgisi bekleniyor');
+          addEvent('Görev tamamlandı (Şarj İstasyonuna Git henüz aktif değil)');
+        } else if (finalActionType === 'goto_base') {
+          // TODO: base konumunun gerçek X/Y/Yaw'ı elimize geçince goto_base burada dispatchGoal ile bağlanacak.
+          console.warn('[finalAction] goto_base henüz bağlanmadı — base konumu koordinatı bekleniyor');
+          addEvent('Görev tamamlandı (Base Konuma Git henüz aktif değil)');
+        }
       } else {
         addEvent('Görev tamamlandı');
       }
     }
 
     wasBusyRef.current = queueBusy;
-  }, [addEvent, clearPlanPath, dispatchGoal, queueBusy]);
+  }, [addEvent, clearPlanPath, dispatchGoal, queueBusy, runFinalActionTill]);
 
   // ROS bağlantısı kesilip geri geldiğinde Son Olaylar paneline kayıt düşer.
   useEffect(() => {
@@ -266,8 +325,8 @@ export function NavigationProvider({ children }) {
 
   // useMemo: statusText yalnızca bağımlılıklar değişince yeniden hesaplanır.
   const statusText = useMemo(
-    () => getStatusText({ isConnected, emergencyStopped, queueBusy, activeTaskProgress }),
-    [isConnected, emergencyStopped, queueBusy, activeTaskProgress],
+    () => getStatusText({ isConnected, emergencyStopped, coverageStatus, queueBusy, activeTaskProgress }),
+    [isConnected, emergencyStopped, coverageStatus, queueBusy, activeTaskProgress],
   );
 
   // useMemo: Context value nesnesinin referansını sabit tutar; gereksiz alt bileşen render'ını azaltır.

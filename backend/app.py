@@ -144,10 +144,28 @@ def _normalize_location(raw):
     }
 
 
+def _normalize_final_action(raw):
+    """
+    Görev bitince çalışacak son eylemi doğrular; geçersiz/eksikse wait'a düşer.
+    Tür anlamları (NavigationContext bu değere göre dal seçer):
+      wait — rota biter, robot bekler (varsayılan)
+      till — rotadan sonra Toprağı Sür (coverage) ROS akışı başlar
+      goto_charge — şarj istasyonuna git (henüz ROS'a bağlı değil)
+      goto_base — base konuma git (henüz koordinat tanımlı değil)
+    """
+    valid_types = {"wait", "till", "goto_charge", "goto_base"}
+    if not isinstance(raw, dict):
+        return {"type": "wait"}
+    action_type = raw.get("type")
+    if action_type not in valid_types:
+        return {"type": "wait"}
+    return {"type": action_type}
+
+
 def _normalize_task(raw):
     """
     İstemciden gelen görev verisini doğrular: ad + en az bir adım (x, y, yaw).
-    Çok adımlı rotalar ve tek adımlı görevler aynı yapıda saklanır.
+    Opsiyonel: description (metin), finalAction (görev bitince eylem).
     """
     if not isinstance(raw, dict):
         return None
@@ -171,11 +189,19 @@ def _normalize_task(raw):
             "yaw": float(yaw),
         })
 
-    return {
+    description = raw.get("description")
+    if description is not None and not isinstance(description, str):
+        return None
+
+    task = {
         "id": raw.get("id") or f"task_{uuid.uuid4().hex[:8]}",
         "name": name.strip(),
         "steps": normalized_steps,
+        "finalAction": _normalize_final_action(raw.get("finalAction")),
     }
+    if isinstance(description, str) and description.strip():
+        task["description"] = description.strip()
+    return task
 
 
 def _coords_match(a, b, tolerance=1e-3):
@@ -219,6 +245,35 @@ def _task_from_location(location):
             "yaw": location["yaw"],
         }],
     }
+
+
+def _sync_auto_task_for_location(map_id, location):
+    """
+    Konum düzenlenince operatör panelindeki otomatik görevin eski ad/koordinatla kalmasını önler.
+    Yalnızca locationId eşleşen tek adımlı görevler güncellenir — çok adımlı rotalar etkilenmez.
+    """
+    tasks_path = _map_data_file(map_id, "tasks.json")
+    tasks = _read_json_file(tasks_path, default=[])
+    if not isinstance(tasks, list):
+        return
+
+    location_id = location.get("id")
+    modified = False
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        steps = task.get("steps") or []
+        if task.get("locationId") == location_id and len(steps) == 1:
+            task["name"] = location["name"]
+            task["steps"] = [{
+                "x": location["x"],
+                "y": location["y"],
+                "yaw": location["yaw"],
+            }]
+            modified = True
+
+    if modified:
+        _write_json_file(tasks_path, tasks)
 
 
 def _sync_single_step_tasks_from_locations(map_id):
@@ -405,8 +460,35 @@ def add_map_location(map_id):
     return jsonify(location), 201
 
 
+# Mühendis paneli: mevcut konumu günceller; bağlı otomatik görev aynı istekte senkronize edilir.
+# PUT /api/maps/<map_id>/locations/<location_id> — PIN korumalı. Yalnızca mühendis paneli.
+@app.route('/api/maps/<map_id>/locations/<location_id>', methods=['PUT'])
+def update_map_location(map_id, location_id):
+    auth_error = _require_admin()
+    if auth_error:
+        return auth_error
+
+    payload = request.get_json(silent=True)
+    location = _normalize_location({**(payload or {}), "id": location_id})
+    if location is None:
+        return jsonify({"error": "Expected {name, x, y, yaw}"}), 400
+
+    data, error = _read_map_data_file(map_id, "locations.json")
+    if error:
+        return error
+
+    index = next((i for i, item in enumerate(data) if item.get("id") == location_id), None)
+    if index is None:
+        return jsonify({"error": "Location not found"}), 404
+
+    data[index] = location
+    _write_json_file(_map_data_file(map_id, "locations.json"), data)
+    _sync_auto_task_for_location(map_id, location)
+    return jsonify(location)
+
+
+# Mühendis paneli: konumu ve locationId ile bağlı otomatik tek adımlı görevi siler.
 # DELETE /api/maps/<map_id>/locations/<location_id> — PIN korumalı. Yalnızca mühendis paneli.
-# Konumu siler; locationId ile bağlı otomatik tek adımlı görevi de tasks.json'dan kaldırır.
 @app.route('/api/maps/<map_id>/locations/<location_id>', methods=['DELETE'])
 def delete_map_location(map_id, location_id):
     auth_error = _require_admin()
@@ -465,6 +547,59 @@ def add_map_task(map_id):
     data.append(task)
     _write_json_file(_map_data_file(map_id, "tasks.json"), data)
     return jsonify(task), 201
+
+
+# Mühendis paneli: görev adı, adımları, açıklama ve finalAction'ı günceller.
+# PUT /api/maps/<map_id>/tasks/<task_id> — PIN korumalı. Yalnızca mühendis paneli.
+@app.route('/api/maps/<map_id>/tasks/<task_id>', methods=['PUT'])
+def update_map_task(map_id, task_id):
+    auth_error = _require_admin()
+    if auth_error:
+        return auth_error
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Expected JSON body"}), 400
+
+    task = _normalize_task({**payload, "id": task_id})
+    if task is None:
+        return jsonify({"error": "Expected {name, steps: [{x,y,yaw}, ...]}"}), 400
+
+    data, error = _read_map_data_file(map_id, "tasks.json")
+    if error:
+        return error
+
+    index = next((i for i, item in enumerate(data) if item.get("id") == task_id), None)
+    if index is None:
+        return jsonify({"error": "Task not found"}), 404
+
+    existing = data[index]
+    if existing.get("locationId"):
+        task["locationId"] = existing["locationId"]
+
+    data[index] = task
+    _write_json_file(_map_data_file(map_id, "tasks.json"), data)
+    return jsonify(task)
+
+
+# Mühendis paneli: görevi tasks.json'dan kalıcı olarak kaldırır.
+# DELETE /api/maps/<map_id>/tasks/<task_id> — PIN korumalı. Yalnızca mühendis paneli.
+@app.route('/api/maps/<map_id>/tasks/<task_id>', methods=['DELETE'])
+def delete_map_task(map_id, task_id):
+    auth_error = _require_admin()
+    if auth_error:
+        return auth_error
+
+    data, error = _read_map_data_file(map_id, "tasks.json")
+    if error:
+        return error
+
+    next_data = [item for item in data if item.get("id") != task_id]
+    if len(next_data) == len(data):
+        return jsonify({"error": "Task not found"}), 404
+
+    _write_json_file(_map_data_file(map_id, "tasks.json"), next_data)
+    return jsonify({"ok": True})
 
 
 # GET /api/maps/<map_id>/boundary — Herkese açık. Operatör + mühendis paneli.

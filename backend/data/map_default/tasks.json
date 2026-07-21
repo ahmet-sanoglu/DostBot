@@ -38,10 +38,30 @@
     "locationId": "loc_042429a0",
     "steps": [
       {
-        "x": 7.8,
+        "x": 9.0,
         "y": -2.5,
         "yaw": 0.0
       }
     ]
+  },
+  {
+    "id": "task_c4406068",
+    "name": "Togragi Sur",
+    "steps": [
+      {
+        "x": 10.0,
+        "y": 0.0,
+        "yaw": 0.0
+      },
+      {
+        "x": 13.0,
+        "y": 0.0,
+        "yaw": 0.0
+      }
+    ],
+    "finalAction": {
+      "type": "till"
+    },
+    "description": "opsiyonel"
   }
 ]

@@ -13,6 +13,7 @@ export default function EngineerModal({
   open,
   onClose,
   wide = false,
+  tall = false,
   ariaLabelledBy,
   children,
 }) {
@@ -37,7 +38,7 @@ export default function EngineerModal({
       />
       <div className="engineer-modal-layer">
         <div
-          className={`engineer-modal${wide ? ' engineer-modal--wide' : ''}`}
+          className={`engineer-modal${wide ? ' engineer-modal--wide' : ''}${tall ? ' engineer-modal--tall' : ''}`}
           role="dialog"
           aria-modal="true"
           aria-labelledby={ariaLabelledBy}

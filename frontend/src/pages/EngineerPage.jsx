@@ -7,7 +7,10 @@ import {
   createMapTask,
   deleteMapBoundary,
   deleteMapLocation,
+  deleteMapTask,
   saveMapBoundary,
+  updateMapLocation,
+  updateMapTask,
 } from '../utils/adminApi';
 import {
   fetchActiveMap,
@@ -39,7 +42,11 @@ export default function EngineerPage() {
   const [loadError, setLoadError] = useState(null);
 
   const [locationModalOpen, setLocationModalOpen] = useState(false);
+  const [locationModalMode, setLocationModalMode] = useState('create');
+  const [editingLocation, setEditingLocation] = useState(null);
   const [taskModalOpen, setTaskModalOpen] = useState(false);
+  const [taskModalMode, setTaskModalMode] = useState('create');
+  const [editingTask, setEditingTask] = useState(null);
   const [locationSaving, setLocationSaving] = useState(false);
   const [taskSaving, setTaskSaving] = useState(false);
   const [locationModalError, setLocationModalError] = useState('');
@@ -79,14 +86,20 @@ export default function EngineerPage() {
     }
   }, [authenticated, loadMapData]);
 
-  /** Yeni konumu backend'e kaydeder; backend otomatik tek adımlı görev de oluşturur. */
-  const handleSaveLocation = async (location) => {
+  /** Yeni konum ekler veya düzenleme modunda mevcut konumu günceller. */
+  const handleSaveLocation = async (location, mode = 'create') => {
     if (!activeMap) return false;
     setLocationSaving(true);
     setLocationModalError('');
     try {
-      await createMapLocation(activeMap.id, location);
+      if (mode === 'edit' && editingLocation?.id) {
+        await updateMapLocation(activeMap.id, editingLocation.id, location);
+      } else {
+        await createMapLocation(activeMap.id, location);
+      }
       setLocationModalOpen(false);
+      setEditingLocation(null);
+      setLocationModalMode('create');
       await loadMapData();
       return true;
     } catch (err) {
@@ -95,6 +108,28 @@ export default function EngineerPage() {
     } finally {
       setLocationSaving(false);
     }
+  };
+
+  /** Konum düzenleme modalını açar — PUT sonrası backend otomatik görevi de senkronize eder. */
+  const handleEditLocation = (location) => {
+    setLocationModalMode('edit');
+    setEditingLocation(location);
+    setLocationModalError('');
+    setLocationModalOpen(true);
+  };
+
+  const handleCloseLocationModal = () => {
+    setLocationModalOpen(false);
+    setEditingLocation(null);
+    setLocationModalMode('create');
+    setLocationModalError('');
+  };
+
+  const handleOpenCreateLocationModal = () => {
+    setLocationModalMode('create');
+    setEditingLocation(null);
+    setLocationModalError('');
+    setLocationModalOpen(true);
   };
 
   /** Konumu siler; locationId'ye bağlı otomatik tek adımlı görev de backend'de silinir. */
@@ -108,14 +143,20 @@ export default function EngineerPage() {
     }
   };
 
-  /** Manuel çok adımlı görevi tasks.json'a ekler (en az 2 konum). */
-  const handleSaveTask = async (task) => {
+  /** Yeni görev ekler veya düzenleme modunda mevcut görevi günceller. */
+  const handleSaveTask = async (task, mode = 'create') => {
     if (!activeMap) return false;
     setTaskSaving(true);
     setTaskModalError('');
     try {
-      await createMapTask(activeMap.id, task);
+      if (mode === 'edit' && editingTask?.id) {
+        await updateMapTask(activeMap.id, editingTask.id, task);
+      } else {
+        await createMapTask(activeMap.id, task);
+      }
       setTaskModalOpen(false);
+      setEditingTask(null);
+      setTaskModalMode('create');
       await loadMapData();
       return true;
     } catch (err) {
@@ -124,6 +165,42 @@ export default function EngineerPage() {
     } finally {
       setTaskSaving(false);
     }
+  };
+
+  /** Görev düzenleme modalını açar. */
+  const handleEditTask = (task) => {
+    setTaskModalMode('edit');
+    setEditingTask(task);
+    setTaskModalError('');
+    setTaskModalOpen(true);
+  };
+
+  /** Görevi siler (onay ile). */
+  const handleDeleteTask = async (taskId) => {
+    if (!activeMap) return;
+    if (!window.confirm('Bu görevi silmek istediğinize emin misiniz?')) {
+      return;
+    }
+    try {
+      await deleteMapTask(activeMap.id, taskId);
+      await loadMapData();
+    } catch (err) {
+      setLoadError(err.message || 'Görev silinemedi.');
+    }
+  };
+
+  const handleCloseTaskModal = () => {
+    setTaskModalOpen(false);
+    setEditingTask(null);
+    setTaskModalMode('create');
+    setTaskModalError('');
+  };
+
+  const handleOpenCreateTaskModal = () => {
+    setTaskModalMode('create');
+    setEditingTask(null);
+    setTaskModalError('');
+    setTaskModalOpen(true);
   };
 
   /** Mini haritada geofence poligonu çizmeye başlar. */
@@ -236,10 +313,7 @@ export default function EngineerPage() {
             <button
               type="button"
               className="autonomous-btn autonomous-btn--small"
-              onClick={() => {
-                setLocationModalError('');
-                setLocationModalOpen(true);
-              }}
+              onClick={handleOpenCreateLocationModal}
             >
               + Ekle
             </button>
@@ -259,13 +333,23 @@ export default function EngineerPage() {
                       X {location.x.toFixed(2)} m · Y {location.y.toFixed(2)} m · Yaw {formatYawDegrees(location.yaw)}°
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    className="autonomous-btn autonomous-btn--ghost autonomous-btn--small"
-                    onClick={() => handleDeleteLocation(location.id)}
-                  >
-                    Sil
-                  </button>
+                  {/* Düzenle/Sil: mühendis CRUD — operatör panelindeki konum/görev listesini günceller */}
+                  <div className="engineer-list__item-actions">
+                    <button
+                      type="button"
+                      className="autonomous-btn autonomous-btn--ghost autonomous-btn--small"
+                      onClick={() => handleEditLocation(location)}
+                    >
+                      Düzenle
+                    </button>
+                    <button
+                      type="button"
+                      className="autonomous-btn autonomous-btn--ghost autonomous-btn--small"
+                      onClick={() => handleDeleteLocation(location.id)}
+                    >
+                      Sil
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -280,16 +364,13 @@ export default function EngineerPage() {
             </div>
             <div className="engineer-list__header-actions">
               <p className="engineer-list__hint">
-                Birden fazla konumu sıralı bir rotada birleştirmek için kullanın.
+                Koordinat adımları ve görev bitince eylem tanımlayın.
                 Tek nokta görevleri, konum eklendiğinde otomatik oluşturulur.
               </p>
               <button
                 type="button"
                 className="autonomous-btn autonomous-btn--small"
-                onClick={() => {
-                  setTaskModalError('');
-                  setTaskModalOpen(true);
-                }}
+                onClick={handleOpenCreateTaskModal}
               >
                 + Ekle
               </button>
@@ -306,9 +387,29 @@ export default function EngineerPage() {
                 <li key={task.id} className="engineer-list__item">
                   <div>
                     <strong>{task.name}</strong>
+                    {task.description && (
+                      <p className="autonomous-panel__meta">{task.description}</p>
+                    )}
                     <p className="autonomous-panel__meta">
                       {Array.isArray(task.steps) ? task.steps.length : 0} adım
                     </p>
+                  </div>
+                  {/* Düzenle/Sil: görev CRUD — finalAction ve adımlar operatör Başlat akışını etkiler */}
+                  <div className="engineer-list__item-actions">
+                    <button
+                      type="button"
+                      className="autonomous-btn autonomous-btn--ghost autonomous-btn--small"
+                      onClick={() => handleEditTask(task)}
+                    >
+                      Düzenle
+                    </button>
+                    <button
+                      type="button"
+                      className="autonomous-btn autonomous-btn--ghost autonomous-btn--small"
+                      onClick={() => handleDeleteTask(task.id)}
+                    >
+                      Sil
+                    </button>
                   </div>
                 </li>
               ))}
@@ -341,19 +442,22 @@ export default function EngineerPage() {
 
       <AddLocationModal
         open={locationModalOpen}
-        onClose={() => setLocationModalOpen(false)}
+        onClose={handleCloseLocationModal}
         onSave={handleSaveLocation}
         saving={locationSaving}
         error={locationModalError}
+        mode={locationModalMode}
+        initialLocation={editingLocation}
       />
 
       <AddTaskModal
         open={taskModalOpen}
-        locations={locations}
-        onClose={() => setTaskModalOpen(false)}
+        onClose={handleCloseTaskModal}
         onSave={handleSaveTask}
         saving={taskSaving}
         error={taskModalError}
+        mode={taskModalMode}
+        initialTask={editingTask}
       />
     </div>
   );

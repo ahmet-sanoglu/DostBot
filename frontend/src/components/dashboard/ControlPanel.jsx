@@ -72,6 +72,9 @@ export default function ControlPanel({
                 <li key={task.id || task.name} className="task-card">
                   <div className="task-card__body">
                     <strong className="task-card__name">{task.name || 'Adsız görev'}</strong>
+                    {task.description && (
+                      <p className="task-card__description">{task.description}</p>
+                    )}
                     <p className="autonomous-panel__meta">{formatStepCount(task.steps)}</p>
                   </div>
                   <button

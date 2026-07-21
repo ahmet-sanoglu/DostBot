@@ -62,6 +62,18 @@ export async function createMapLocation(mapId, location) {
   });
 }
 
+/** PUT — konum güncellenince backend bağlı otomatik görevi de senkronize eder. */
+export async function updateMapLocation(mapId, locationId, location) {
+  return fetchJson(
+    `${API_BASE}/api/maps/${encodeURIComponent(mapId)}/locations/${encodeURIComponent(locationId)}`,
+    {
+      method: 'PUT',
+      headers: adminHeaders(),
+      body: JSON.stringify(location),
+    },
+  );
+}
+
 /** Konumu siler; locationId ile bağlı otomatik görev backend'de de silinir. */
 export async function deleteMapLocation(mapId, locationId) {
   return fetchJson(
@@ -80,6 +92,29 @@ export async function createMapTask(mapId, task) {
     headers: adminHeaders(),
     body: JSON.stringify(task),
   });
+}
+
+/** PUT — mühendis panelinden görev düzenleme modalının kaydet akışı. */
+export async function updateMapTask(mapId, taskId, task) {
+  return fetchJson(
+    `${API_BASE}/api/maps/${encodeURIComponent(mapId)}/tasks/${encodeURIComponent(taskId)}`,
+    {
+      method: 'PUT',
+      headers: adminHeaders(),
+      body: JSON.stringify(task),
+    },
+  );
+}
+
+/** DELETE — mühendis panelinden görev silme; operatör listesinden de kalkar. */
+export async function deleteMapTask(mapId, taskId) {
+  return fetchJson(
+    `${API_BASE}/api/maps/${encodeURIComponent(mapId)}/tasks/${encodeURIComponent(taskId)}`,
+    {
+      method: 'DELETE',
+      headers: adminHeaders(),
+    },
+  );
 }
 
 /** Mühendis panelinde çizilen geofence poligonunu kaydeder. */

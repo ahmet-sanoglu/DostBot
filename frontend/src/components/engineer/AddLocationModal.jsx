@@ -1,16 +1,67 @@
-// Mühendis paneli — yeni konum ekleme modal formu.
-// Kaydedilince backend otomatik tek adımlı görev de oluşturur; yaw derece → radyan dönüşümü yapılır.
+// Mühendis paneli — konum ekleme/düzenleme modal formu.
+// Kaydedilince backend otomatik tek adımlı görev de oluşturur/günceller; yaw derece → radyan dönüşümü yapılır.
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { degreesToRadians } from '../../utils/rosNavigation';
 import EngineerModal from './EngineerModal';
 
-/** Konum adı + X/Y/Yaw formu; onSave parent'ta (EngineerPage) API çağrısını yapar. */
-export default function AddLocationModal({ open, onClose, onSave, saving, error }) {
+/** Radyan yaw'ı formda gösterilecek derece string'ine çevirir. */
+function radiansToDegreesString(yaw) {
+  if (typeof yaw !== 'number' || Number.isNaN(yaw)) {
+    return '0';
+  }
+  return ((yaw * 180) / Math.PI).toFixed(1);
+}
+
+/** Konum nesnesinden form state'ini üretir (edit modunda modal açılınca doldurulur). */
+function locationToFormState(location) {
+  if (!location) {
+    return { name: '', x: '', y: '', yaw: '0' };
+  }
+
+  return {
+    name: location.name || '',
+    x: typeof location.x === 'number' ? String(location.x) : '',
+    y: typeof location.y === 'number' ? String(location.y) : '',
+    yaw: radiansToDegreesString(location.yaw),
+  };
+}
+
+/**
+ * mode + initialLocation: aynı modal hem ekleme hem düzenleme için — EngineerPage hangi API'yi
+ * çağıracağını mode'a bakarak seçer (POST vs PUT).
+ */
+export default function AddLocationModal({
+  open,
+  onClose,
+  onSave,
+  saving,
+  error,
+  mode = 'create',
+  initialLocation = null,
+}) {
+  const isEditMode = mode === 'edit';
+  const modalTitle = isEditMode ? 'Konumu Düzenle' : 'Konum Ekle';
+  const modalTitleId = isEditMode ? 'edit-location-title' : 'add-location-title';
+
   const [name, setName] = useState('');
   const [x, setX] = useState('');
   const [y, setY] = useState('');
   const [yaw, setYaw] = useState('0');
+
+  // Modal her açıldığında formu sıfırla veya initialLocation'dan doldur (edit modu)
+  useEffect(() => {
+    if (!open) return;
+
+    const formState = isEditMode
+      ? locationToFormState(initialLocation)
+      : locationToFormState(null);
+
+    setName(formState.name);
+    setX(formState.x);
+    setY(formState.y);
+    setYaw(formState.yaw);
+  }, [open, isEditMode, initialLocation]);
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -26,9 +77,9 @@ export default function AddLocationModal({ open, onClose, onSave, saving, error 
       x: parsedX,
       y: parsedY,
       yaw: degreesToRadians(parsedYaw),  // ROS radyan bekler
-    });
+    }, mode);
 
-    if (saved) {
+    if (saved && !isEditMode) {
       setName('');
       setX('');
       setY('');
@@ -37,8 +88,8 @@ export default function AddLocationModal({ open, onClose, onSave, saving, error 
   };
 
   return (
-    <EngineerModal open={open} onClose={onClose} ariaLabelledBy="add-location-title">
-      <h3 id="add-location-title">Konum Ekle</h3>
+    <EngineerModal open={open} onClose={onClose} ariaLabelledBy={modalTitleId}>
+      <h3 id={modalTitleId}>{modalTitle}</h3>
       <form className="engineer-form" onSubmit={handleSubmit}>
         <label className="engineer-form__field">
           <span>İsim</span>
