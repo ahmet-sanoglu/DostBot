@@ -40,6 +40,22 @@ Muhendis Paneli (/muhendis) - Konum/gorev tanimlama, harita secimi, gecilebilir 
 
 ## Kurulum
 
+### Hizli kurulum (tek komut)
+
+```bash
+chmod +x setup.sh
+./setup.sh
+```
+
+Bundan sonra elle yapman gerekenler:
+
+1. `backend/.env` dosyasini olustur (`MAP_DIRECTORY`, `ADMIN_PIN`) — yedekten kopyala
+2. `agriculture_map1/` klasorunu yedekten geri getir
+3. `bag_examples_for_ui/` klasorunu yedekten geri getir
+4. GitHub icin SSH anahtari olustur (`ssh-keygen`) ve GitHub hesabina ekle
+
+### Calistirma
+
 Backend: cd backend, source ../venv/bin/activate, python3 app.py
 Frontend: cd frontend, npm run dev
 ROS koprusu: ros2 launch rosbridge_server rosbridge_websocket_launch.xml
