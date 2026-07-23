@@ -1,6 +1,7 @@
-// Operatör panelinin sağ sütunu: durum, görev listesi, joystick ve son olaylar kartlarını bir araya getirir.
+// Operatör panelinin sağ sütunu: durum, joystick, görev listesi ve son olaylar kartlarını bir araya getirir.
 // CSS'te .control-panel overflow-y: auto ile kaydırılabilir — kartlar ekranı aşınca
 // "Son Olaylar" görünür alanın dışında kalmasın diye (sayfa değil, panel içi scroll).
+// Görev listesi max-height + iç scroll ile joystick'i aşağı itmez.
 
 import React from 'react';
 import { INVALID_GOAL_MESSAGE } from '../../utils/mapPassability';
@@ -43,6 +44,16 @@ export default function ControlPanel({
   return (
     <aside className="control-panel autonomous-panel" aria-label="Kontrol paneli">
       <StatusCard activeMap={activeMap} />
+
+      <div className="panel-card panel-card--manual">
+        <div className="panel-card__title">
+          <span className="panel-card__icon">🕹️</span>
+          Manuel Sürüş
+        </div>
+        <div className="manual-drive__joystick-wrap">
+          <Joystick />
+        </div>
+      </div>
 
       <div className="panel-card panel-card--tasks">
         <div className="panel-card__title">
@@ -90,16 +101,6 @@ export default function ControlPanel({
             })}
           </ul>
         )}
-      </div>
-
-      <div className="panel-card panel-card--manual">
-        <div className="panel-card__title">
-          <span className="panel-card__icon">🕹️</span>
-          Manuel Sürüş
-        </div>
-        <div className="manual-drive__joystick-wrap">
-          <Joystick />
-        </div>
       </div>
 
       <div className="panel-card panel-card--events">

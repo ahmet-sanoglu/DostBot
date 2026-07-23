@@ -143,6 +143,19 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.task-list::-webkit-scrollbar,
+.engineer-list__items::-webkit-scrollbar {
+  width: 6px;
+}
+
+.task-list::-webkit-scrollbar-thumb,
+.engineer-list__items::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
 }
 
 .task-card {
@@ -1448,6 +1461,8 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+  max-height: 320px;
+  overflow-y: auto;
 }
 
 body.engineer-modal-open {
