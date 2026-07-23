@@ -1,11 +1,12 @@
 // Mühendis paneli — görev oluşturma/düzenleme modal formu.
-// Dinamik X/Y/Yaw adımları, opsiyonel açıklama ve görev bitince eylem seçimi içerir.
+// Her noktanın kendi dropdown'ı vardır: aynı rotada A'da sürüm, B'de bekleme gibi
+// çoklu tarla/çoklu eylem senaryoları tek görevde tanımlanabilsin diye (tek finalAction yetmez).
 
 import React, { useEffect, useState } from 'react';
 import { degreesToRadians } from '../../utils/rosNavigation';
 import EngineerModal from './EngineerModal';
 
-const FINAL_ACTION_OPTIONS = [
+const STEP_ACTION_OPTIONS = [
   { value: 'wait', label: 'Bekle' },
   { value: 'till', label: 'Toprağı Sür' },
   { value: 'goto_charge', label: 'Şarj İstasyonuna Git' },
@@ -13,7 +14,8 @@ const FINAL_ACTION_OPTIONS = [
 ];
 
 function createEmptyStep() {
-  return { x: '', y: '', yaw: '0' };
+  // actionType form state'i; kayıtta backend step.action: {type} olarak gider
+  return { x: '', y: '', yaw: '0', actionType: 'wait' };
 }
 
 /** Radyan yaw'ı formda gösterilecek derece string'ine çevirir. */
@@ -36,6 +38,7 @@ function parseStep(step) {
     x: parsedX,
     y: parsedY,
     yaw: degreesToRadians(parsedYaw),
+    action: { type: step.actionType || 'wait' },
   };
 }
 
@@ -46,7 +49,6 @@ function taskToFormState(task) {
       name: '',
       description: '',
       steps: [createEmptyStep()],
-      finalActionType: 'wait',
     };
   }
 
@@ -55,6 +57,7 @@ function taskToFormState(task) {
       x: typeof step.x === 'number' ? String(step.x) : '',
       y: typeof step.y === 'number' ? String(step.y) : '',
       yaw: radiansToDegreesString(step.yaw),
+      actionType: step.action?.type || task.finalAction?.type || 'wait',
     }))
     : [createEmptyStep()];
 
@@ -62,7 +65,6 @@ function taskToFormState(task) {
     name: task.name || '',
     description: task.description || '',
     steps: taskSteps,
-    finalActionType: task.finalAction?.type || 'wait',
   };
 }
 
@@ -85,11 +87,9 @@ export default function AddTaskModal({
 
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  // Dinamik X/Y/Yaw satırları: konum listesine bağlı değil — serbest koordinat ve çok adımlı rota için
+  // Her eleman {x, y, yaw, actionType} — eylem nokta bazlı; tek görev-sonu dropdown kaldırıldı
   const [steps, setSteps] = useState([createEmptyStep()]);
-  const [finalActionType, setFinalActionType] = useState('wait');
 
-  // Modal her açıldığında formu sıfırla veya initialTask'tan doldur (edit modu)
   useEffect(() => {
     if (!open) return;
 
@@ -100,7 +100,6 @@ export default function AddTaskModal({
     setName(formState.name);
     setDescription(formState.description);
     setSteps(formState.steps);
-    setFinalActionType(formState.finalActionType);
   }, [open, isEditMode, initialTask]);
 
   const updateStep = (index, field, value) => {
@@ -130,7 +129,6 @@ export default function AddTaskModal({
     const payload = {
       name: name.trim(),
       steps: parsedSteps,
-      finalAction: { type: finalActionType },
     };
 
     if (description.trim()) {
@@ -142,7 +140,6 @@ export default function AddTaskModal({
       setName('');
       setDescription('');
       setSteps([createEmptyStep()]);
-      setFinalActionType('wait');
     }
   };
 
@@ -175,50 +172,67 @@ export default function AddTaskModal({
         </label>
 
         <div className="engineer-form__field engineer-form__field--full">
-          <span>Adımlar (X / Y / Yaw)</span>
+          <span>Noktalar</span>
           <ul className="engineer-task-steps">
             {steps.map((step, index) => (
-              <li key={index} className="engineer-task-steps__row">
-                <span className="engineer-task-steps__label">Adım {index + 1}</span>
-                <label className="engineer-task-steps__input">
-                  <span>X (m)</span>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={step.x}
-                    onChange={(e) => updateStep(index, 'x', e.target.value)}
-                    required
-                  />
+              <li key={index} className="engineer-task-steps__block">
+                <div className="engineer-task-steps__row">
+                  <span className="engineer-task-steps__label">Nokta {index + 1}</span>
+                  <label className="engineer-task-steps__input">
+                    <span>X (m)</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={step.x}
+                      onChange={(e) => updateStep(index, 'x', e.target.value)}
+                      required
+                    />
+                  </label>
+                  <label className="engineer-task-steps__input">
+                    <span>Y (m)</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={step.y}
+                      onChange={(e) => updateStep(index, 'y', e.target.value)}
+                      required
+                    />
+                  </label>
+                  <label className="engineer-task-steps__input">
+                    <span>Yaw (°)</span>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={step.yaw}
+                      onChange={(e) => updateStep(index, 'yaw', e.target.value)}
+                      required
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="autonomous-btn autonomous-btn--ghost autonomous-btn--small engineer-task-steps__remove"
+                    onClick={() => removeStep(index)}
+                    disabled={steps.length <= 1}
+                    aria-label={`Nokta ${index + 1} kaldır`}
+                  >
+                    Kaldır
+                  </button>
+                </div>
+                {/* Nokta bazlı eylem — NavigationContext bu step'e varınca seçilen türü çalıştırır */}
+                <label className="engineer-task-steps__action">
+                  <span>Bu noktada ne yapılsın</span>
+                  <select
+                    className="engineer-form__select"
+                    value={step.actionType}
+                    onChange={(e) => updateStep(index, 'actionType', e.target.value)}
+                  >
+                    {STEP_ACTION_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
                 </label>
-                <label className="engineer-task-steps__input">
-                  <span>Y (m)</span>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={step.y}
-                    onChange={(e) => updateStep(index, 'y', e.target.value)}
-                    required
-                  />
-                </label>
-                <label className="engineer-task-steps__input">
-                  <span>Yaw (°)</span>
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={step.yaw}
-                    onChange={(e) => updateStep(index, 'yaw', e.target.value)}
-                    required
-                  />
-                </label>
-                <button
-                  type="button"
-                  className="autonomous-btn autonomous-btn--ghost autonomous-btn--small engineer-task-steps__remove"
-                  onClick={() => removeStep(index)}
-                  disabled={steps.length <= 1}
-                  aria-label={`Adım ${index + 1} kaldır`}
-                >
-                  Kaldır
-                </button>
               </li>
             ))}
           </ul>
@@ -227,24 +241,9 @@ export default function AddTaskModal({
             className="autonomous-btn autonomous-btn--ghost autonomous-btn--small engineer-task-steps__add"
             onClick={addStep}
           >
-            + Adım Ekle
+            + Yeni Nokta Ekle
           </button>
         </div>
-
-        <label className="engineer-form__field engineer-form__field--full">
-          <span>Görev bitince</span>
-          <select
-            className="engineer-form__select"
-            value={finalActionType}
-            onChange={(e) => setFinalActionType(e.target.value)}
-          >
-            {FINAL_ACTION_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
 
         {error && (
           <p className="engineer-form__error">{error}</p>

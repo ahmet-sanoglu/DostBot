@@ -33,7 +33,11 @@ export default function StatusCard({ activeMap, showMapName = true }) {
       </div>
       {activeTaskProgress && (
         <p className="autonomous-panel__meta">
-          Görev ilerlemesi: {activeTaskProgress.currentStep}/{activeTaskProgress.totalSteps}
+          {/* stepActionLabel: till vb. sürerken operatör hangi adımda hangi eylemde olduğunu görür */}
+          Görev ilerlemesi: Adım {activeTaskProgress.currentStep}/{activeTaskProgress.totalSteps}
+          {activeTaskProgress.stepActionLabel && (
+            <> — {activeTaskProgress.stepActionLabel}</>
+          )}
         </p>
       )}
       {lastSentGoal && (

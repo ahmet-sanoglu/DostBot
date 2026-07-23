@@ -394,7 +394,7 @@ export default function EngineerPage() {
                       {Array.isArray(task.steps) ? task.steps.length : 0} adım
                     </p>
                   </div>
-                  {/* Düzenle/Sil: görev CRUD — finalAction ve adımlar operatör Başlat akışını etkiler */}
+                  {/* Düzenle/Sil: görev CRUD — step action'ları operatör Başlat zincirini etkiler */}
                   <div className="engineer-list__item-actions">
                     <button
                       type="button"

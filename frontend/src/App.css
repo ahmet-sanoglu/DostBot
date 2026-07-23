@@ -1623,15 +1623,33 @@ body.engineer-modal-open .engineer-page {
   gap: 8px;
 }
 
+.engineer-task-steps__block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border: 0.5px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+}
+
 .engineer-task-steps__row {
   display: grid;
   grid-template-columns: auto 1fr 1fr 1fr auto;
   gap: 8px;
   align-items: end;
-  padding: 10px;
-  border: 0.5px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-bg);
+}
+
+.engineer-task-steps__action {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+}
+
+.engineer-task-steps__action .engineer-form__select {
+  width: 100%;
 }
 
 .engineer-task-steps__label {

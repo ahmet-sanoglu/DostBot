@@ -144,14 +144,15 @@ def _normalize_location(raw):
     }
 
 
-def _normalize_final_action(raw):
+def _normalize_step_action(raw):
     """
-    Görev bitince çalışacak son eylemi doğrular; geçersiz/eksikse wait'a düşer.
-    Tür anlamları (NavigationContext bu değere göre dal seçer):
-      wait — rota biter, robot bekler (varsayılan)
-      till — rotadan sonra Toprağı Sür (coverage) ROS akışı başlar
-      goto_charge — şarj istasyonuna git (henüz ROS'a bağlı değil)
-      goto_base — base konuma git (henüz koordinat tanımlı değil)
+    Bir navigasyon adımına varıldığında çalışacak eylemi doğrular; geçersiz/eksikse wait'a düşer.
+    Görev sonunda tek eylem yerine step başına action kullanılır — aynı rotada bir noktada
+    sürüm, diğerinde bekleme gibi çoklu tarla/çoklu eylem senaryoları tanımlanabilsin diye.
+    Tür anlamları (NavigationContext her adım sonrası buna göre dal seçer):
+      wait — hemen sıradaki adıma geç veya görevi bitir
+      till — bu noktada Toprağı Sür (coverage) ROS akışı
+      goto_charge / goto_base — henüz ROS'a bağlı değil (şimdilik uyarı + geç)
     """
     valid_types = {"wait", "till", "goto_charge", "goto_base"}
     if not isinstance(raw, dict):
@@ -164,8 +165,10 @@ def _normalize_final_action(raw):
 
 def _normalize_task(raw):
     """
-    İstemciden gelen görev verisini doğrular: ad + en az bir adım (x, y, yaw).
-    Opsiyonel: description (metin), finalAction (görev bitince eylem).
+    İstemciden gelen görev verisini doğrular: ad + en az bir adım (x, y, yaw, action).
+    Üst seviye finalAction kaldırıldı — eylem görev bitince değil, varılan her noktada
+    ayrı tanımlanır; NavigationContext zinciri step.action üzerinden ilerler.
+    Opsiyonel: description (metin).
     """
     if not isinstance(raw, dict):
         return None
@@ -187,6 +190,7 @@ def _normalize_task(raw):
             "x": float(x),
             "y": float(y),
             "yaw": float(yaw),
+            "action": _normalize_step_action(step.get("action")),
         })
 
     description = raw.get("description")
@@ -197,7 +201,6 @@ def _normalize_task(raw):
         "id": raw.get("id") or f"task_{uuid.uuid4().hex[:8]}",
         "name": name.strip(),
         "steps": normalized_steps,
-        "finalAction": _normalize_final_action(raw.get("finalAction")),
     }
     if isinstance(description, str) and description.strip():
         task["description"] = description.strip()
@@ -234,6 +237,7 @@ def _task_from_location(location):
     """
     Konum kaydından operatör panelinde 'Başlat' edilebilir tek adımlı görev üretir.
     locationId alanı, konum silindiğinde bağlı görevin de silinmesini sağlar.
+    action: wait — konum ekleme UI'ında eylem seçilmez; sadece noktaya git yeterlidir.
     """
     return {
         "id": f"task_{uuid.uuid4().hex[:8]}",
@@ -243,6 +247,7 @@ def _task_from_location(location):
             "x": location["x"],
             "y": location["y"],
             "yaw": location["yaw"],
+            "action": {"type": "wait"},
         }],
     }
 
@@ -251,6 +256,7 @@ def _sync_auto_task_for_location(map_id, location):
     """
     Konum düzenlenince operatör panelindeki otomatik görevin eski ad/koordinatla kalmasını önler.
     Yalnızca locationId eşleşen tek adımlı görevler güncellenir — çok adımlı rotalar etkilenmez.
+    Mevcut step action korunur; yoksa wait — mühendis manuel eylem atamadığı otomatik görevler bozulmasın.
     """
     tasks_path = _map_data_file(map_id, "tasks.json")
     tasks = _read_json_file(tasks_path, default=[])
@@ -264,11 +270,13 @@ def _sync_auto_task_for_location(map_id, location):
             continue
         steps = task.get("steps") or []
         if task.get("locationId") == location_id and len(steps) == 1:
+            existing_action = steps[0].get("action") if isinstance(steps[0], dict) else None
             task["name"] = location["name"]
             task["steps"] = [{
                 "x": location["x"],
                 "y": location["y"],
                 "yaw": location["yaw"],
+                "action": _normalize_step_action(existing_action),
             }]
             modified = True
 
@@ -549,7 +557,7 @@ def add_map_task(map_id):
     return jsonify(task), 201
 
 
-# Mühendis paneli: görev adı, adımları, açıklama ve finalAction'ı günceller.
+# Mühendis paneli: görev adı, adımları (step başına action) ve açıklamayı günceller.
 # PUT /api/maps/<map_id>/tasks/<task_id> — PIN korumalı. Yalnızca mühendis paneli.
 @app.route('/api/maps/<map_id>/tasks/<task_id>', methods=['PUT'])
 def update_map_task(map_id, task_id):

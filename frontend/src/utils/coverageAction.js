@@ -1,4 +1,4 @@
-// "Toprağı Sür" finalAction'ının ROS entegrasyonu — NavigationContext görev bitince burayı çağırır.
+// "Toprağı Sür" step action'ının ROS entegrasyonu — NavigationContext her adıma varınca till ise burayı çağırır.
 // Nav2 NavigateToPose'dan farklıdır; coverage alanı robot tarafında önceden hazırlanır (servis + action).
 
 import { Service, ActionClient, Goal } from 'roslib';

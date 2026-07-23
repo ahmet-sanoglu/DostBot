@@ -1,5 +1,5 @@
 // Operatör panelindeki navigasyon akışını yönetir: hedef gönderme, görev kuyruğu, durum metni.
-// Nav2'ye tek seferde bir hedef gider; çok adımlı görevlerin kalan adımları sırayla bekletilir.
+// Nav2'ye tek seferde bir hedef gider; her adıma varınca o step'in action'ı çalışır, sonra sıradaki adım gider.
 // Acil Dur, görev iptali ve "Son Olaylar" panelindeki mesajlar da buradan yönetilir.
 
 import React, {
@@ -41,7 +41,12 @@ export function getStatusText({ isConnected, emergencyStopped, coverageStatus, q
     return coverageStatus;
   }
   if (queueBusy && activeTaskProgress) {
-    return `🎯 ${activeTaskProgress.taskName} - Adım ${activeTaskProgress.currentStep}/${activeTaskProgress.totalSteps}`;
+    const base = `🎯 ${activeTaskProgress.taskName} - Adım ${activeTaskProgress.currentStep}/${activeTaskProgress.totalSteps}`;
+    if (activeTaskProgress.stepActionLabel) {
+      // Büyük durum metninde de eylem görünsün (till sırasında operatör bağlam kaybetmesin)
+      return `${base} — ${activeTaskProgress.stepActionLabel}`;
+    }
+    return base;
   }
   if (queueBusy) {
     return '🎯 Hedefe gidiyor';
@@ -49,16 +54,26 @@ export function getStatusText({ isConnected, emergencyStopped, coverageStatus, q
   return '✅ Hazır';
 }
 
-/** Görev JSON'undaki adımları geçerli koordinatlarla filtreler; eksik alanları atlar. */
+/** Görev adımlarını koordinat + step action ile normalize eder (kuyruk her adımın eylemini taşır). */
 function normalizeTaskSteps(task) {
   if (!Array.isArray(task?.steps)) return [];
   return task.steps
     .filter((step) => typeof step?.x === 'number' && typeof step?.y === 'number')
-    .map((step) => ({
+    .map((step, index, allSteps) => ({
       x: step.x,
       y: step.y,
       yaw: typeof step.yaw === 'number' ? step.yaw : 0,
+      action: {
+        type: step.action?.type
+          || (index === allSteps.length - 1 ? task.finalAction?.type : null)
+          || 'wait',
+      },
     }));
+}
+
+/** Nav2 hedef mesajı için yalnızca koordinat alanlarını ayırır. */
+function stepToGoal(step) {
+  return { x: step.x, y: step.y, yaw: step.yaw };
 }
 
 export function NavigationProvider({ children }) {
@@ -72,24 +87,20 @@ export function NavigationProvider({ children }) {
   const [emergencyStopped, setEmergencyStopped] = useState(false);
   const [coverageStatus, setCoverageStatus] = useState(null);
 
-  // useRef: render'lar arasında değeri saklar; değişince ekranı yeniden çizmez (timer id'leri için ideal).
   const busyTimerRef = useRef(null);
   const estopResetTimerRef = useRef(null);
   const wasBusyRef = useRef(false);
-  // estopTriggeredRef: Acil Dur sonrası queueBusy false olunca yanlışlıkla "görev tamamlandı"
-  // event'i yazılmasını önler — aksi halde iptal edilmiş görev tamamlanmış gibi görünürdü.
   const estopTriggeredRef = useRef(false);
-  // skipNextIdleEventRef: coverage gibi finalAction sonrası gereksiz "Görev tamamlandı" event'ini atlar.
   const skipNextIdleEventRef = useRef(false);
+  const inStepActionRef = useRef(false);  // till gibi uzun eylem sürerken nav-tamamlandı effect'ini yutar
   const wasConnectedRef = useRef(status === ROS_CONNECTED_STATUS);
   const connectionInitializedRef = useRef(false);
-  // pendingStepsRef: çok adımlı görevde henüz gönderilmemiş adımlar; UI'da gösterilmez, kuyrukta bekler.
   const pendingStepsRef = useRef([]);
   const activeTaskRef = useRef(null);
+  const proceedAfterStepActionRef = useRef(null);
 
   const isConnected = status === ROS_CONNECTED_STATUS;
 
-  /** Son Olaylar paneline en fazla MAX_EVENTS kayıt ekler; en yenisi üstte görünür. */
   const addEvent = useCallback((message) => {
     const entry = {
       id: crypto.randomUUID(),
@@ -99,7 +110,6 @@ export function NavigationProvider({ children }) {
     setRecentEvents((prev) => [entry, ...prev].slice(0, MAX_EVENTS));
   }, []);
 
-  /** Nav2'ye hedef gönderir, meşgul bayrağını açar ve NAV_BUSY_MS sonra otomatik kapatır. */
   const dispatchGoal = useCallback((goal, sourceLabel) => {
     const sent = publishNavigationGoal(ros, goal);
     if (!sent) return false;
@@ -119,9 +129,8 @@ export function NavigationProvider({ children }) {
     return true;
   }, [clearPlanPath, ros]);
 
-  /** Tek hedef gönderir; robot meşgulse popup gösterir ve reddeder. */
   const sendNavigationGoal = useCallback((goal, sourceLabel) => {
-    if (queueBusy || pendingStepsRef.current.length > 0) {
+    if (queueBusy || pendingStepsRef.current.length > 0 || activeTaskRef.current) {
       setShowBusyPopup(true);
       return false;
     }
@@ -137,8 +146,6 @@ export function NavigationProvider({ children }) {
     return sent;
   }, [addEvent, dispatchGoal, queueBusy]);
 
-  // Acil Dur (TopBar): Nav2 goal iptali + kuyruk/timer temizliği; joystick sıfırlama TopBar'da ayrı yapılır.
-  // estopTriggeredRef: queueBusy false olunca "görev tamamlandı" yerine "acil dur" event'i yazılması için.
   const emergencyStopNavigation = useCallback(() => {
     cancelActiveNavigationGoal();
 
@@ -152,6 +159,7 @@ export function NavigationProvider({ children }) {
     setActiveTaskProgress(null);
     setCoverageStatus(null);
     skipNextIdleEventRef.current = false;
+    inStepActionRef.current = false;
     clearPlanPath();
 
     if (estopResetTimerRef.current) {
@@ -168,9 +176,118 @@ export function NavigationProvider({ children }) {
     }, 4000);
   }, [clearPlanPath]);
 
-  /** Operatör panelinden seçilen görevi başlatır; çok adımlıysa ilk adımı gönderir, gerisini kuyruğa alır. */
+  /** Step eylemi bittikten sonra kuyruktaki bir sonraki navigasyon hedefini gönderir veya görevi kapatır. */
+  const proceedAfterStepAction = useCallback(() => {
+    const activeTask = activeTaskRef.current;
+    if (!activeTask) return;
+
+    const pending = pendingStepsRef.current;
+    if (pending.length > 0) {
+      const nextStep = pending.shift();
+      const currentStep = activeTask.totalSteps - pending.length;
+      const progress = {
+        ...activeTask,
+        currentStep,
+        stepActionLabel: null,
+      };
+
+      activeTaskRef.current = progress;
+      setActiveTaskProgress(progress);
+
+      const sourceLabel = `Görev: ${progress.taskName} - Adım ${currentStep}/${progress.totalSteps}`;
+      dispatchGoal(stepToGoal(nextStep), sourceLabel);
+      addEvent(`Adım ${currentStep}/${progress.totalSteps}: ${progress.taskName}`);
+      return;
+    }
+
+    addEvent(`${activeTask.taskName} tamamlandı`);
+    activeTaskRef.current = null;
+    setActiveTaskProgress(null);
+    pendingStepsRef.current = [];
+    setQueueBusy(false);
+    skipNextIdleEventRef.current = true;
+  }, [addEvent, dispatchGoal]);
+
+  proceedAfterStepActionRef.current = proceedAfterStepAction;
+
+  /**
+   * Ulaşılan step'in action.type değerini çalıştırır — sıradaki step'in değil.
+   * till: onResult gelene kadar bekler, sonra proceed; goto_*: şimdilik uyarı + hemen proceed
+   * (ileride till gibi ROS bitene kadar bekleyecek).
+   */
+  const runStepAction = useCallback((actionType, stepNumber, taskName) => {
+    const proceed = () => proceedAfterStepActionRef.current?.();
+
+    if (!actionType || actionType === 'wait') {
+      proceed();
+      return;
+    }
+
+    if (actionType === 'till') {
+      inStepActionRef.current = true;
+      setQueueBusy(true);
+      wasBusyRef.current = true;
+      setActiveTaskProgress((prev) => (
+        prev ? { ...prev, stepActionLabel: '🌱 Toprak sürülüyor' } : prev
+      ));
+
+      startCoverageTask(ros, {
+        onFeedback: (distanceRemaining, estimatedSeconds) => {
+          const distText = distanceRemaining != null
+            ? `${Number(distanceRemaining).toFixed(1)} m`
+            : '—';
+          const secText = estimatedSeconds != null
+            ? `~${Math.round(estimatedSeconds)} sn`
+            : '—';
+          setCoverageStatus(`🌱 Toprak sürülüyor — kalan: ${distText}, ${secText}`);
+        },
+        onResult: (success, message) => {
+          setCoverageStatus(null);
+          setActiveTaskProgress((prev) => (
+            prev ? { ...prev, stepActionLabel: null } : prev
+          ));
+          addEvent(success ? `Adım ${stepNumber}: Toprak sürme tamamlandı` : message);
+          inStepActionRef.current = false;
+          proceed();
+        },
+      });
+      return;
+    }
+
+    if (actionType === 'goto_charge') {
+      // İleride till gibi ROS action bitene kadar bekleyip proceed çağrılacak
+      console.warn('[stepAction] goto_charge henüz bağlanmadı — mühendisten action/servis bilgisi bekleniyor');
+      addEvent(`Adım ${stepNumber}: Şarj İstasyonuna Git henüz aktif değil (${taskName})`);
+      proceed();
+      return;
+    }
+
+    if (actionType === 'goto_base') {
+      // İleride till gibi base koordinatına gidilip bitene kadar bekleyip proceed çağrılacak
+      console.warn('[stepAction] goto_base henüz bağlanmadı — base konumu koordinatı bekleniyor');
+      addEvent(`Adım ${stepNumber}: Base Konuma Git henüz aktif değil (${taskName})`);
+      proceed();
+      return;
+    }
+
+    proceed();
+  }, [addEvent, ros]);
+
+  /** Nav2 hedefi tamamlandı (timer) — az önce varılan noktanın eylemini tetikler. */
+  const handleNavigationArrived = useCallback(() => {
+    const activeTask = activeTaskRef.current;
+    if (!activeTask) {
+      addEvent('Görev tamamlandı');
+      return;
+    }
+
+    const step = activeTask.steps?.[activeTask.currentStep - 1];
+    const actionType = step?.action?.type || 'wait';
+    runStepAction(actionType, activeTask.currentStep, activeTask.taskName);
+  }, [addEvent, runStepAction]);
+
   const startTask = useCallback((task) => {
-    if (queueBusy || pendingStepsRef.current.length > 0) {
+    if (queueBusy || pendingStepsRef.current.length > 0 || activeTaskRef.current) {
       setShowBusyPopup(true);
       return false;
     }
@@ -182,11 +299,12 @@ export function NavigationProvider({ children }) {
       taskName: task.name || 'Görev',
       currentStep: 1,
       totalSteps: steps.length,
+      stepActionLabel: null,
     };
 
     activeTaskRef.current = {
       ...progress,
-      finalAction: task.finalAction,
+      steps,
     };
     setActiveTaskProgress(progress);
     pendingStepsRef.current = steps.length > 1 ? steps.slice(1) : [];
@@ -195,7 +313,7 @@ export function NavigationProvider({ children }) {
       ? `Görev: ${progress.taskName}`
       : `Görev: ${progress.taskName} - Adım 1/${steps.length}`;
 
-    const sent = dispatchGoal(steps[0], sourceLabel);
+    const sent = dispatchGoal(stepToGoal(steps[0]), sourceLabel);
     if (sent) {
       addEvent(`${progress.taskName} başlatıldı`);
     } else {
@@ -206,37 +324,16 @@ export function NavigationProvider({ children }) {
     return sent;
   }, [addEvent, dispatchGoal, queueBusy]);
 
-  /** Tüm adımlar bittikten sonra "Toprağı Sür" finalAction'ını ROS coverage action ile başlatır. */
-  const runFinalActionTill = useCallback(() => {
-    setActiveTaskProgress(null);
-    setQueueBusy(true);
-    wasBusyRef.current = true;
-
-    startCoverageTask(ros, {
-      onFeedback: (distanceRemaining, estimatedSeconds) => {
-        const distText = distanceRemaining != null
-          ? `${Number(distanceRemaining).toFixed(1)} m`
-          : '—';
-        const secText = estimatedSeconds != null
-          ? `~${Math.round(estimatedSeconds)} sn`
-          : '—';
-        setCoverageStatus(`🌱 Toprak sürülüyor — kalan: ${distText}, ${secText}`);
-      },
-      onResult: (success, message) => {
-        setCoverageStatus(null);
-        skipNextIdleEventRef.current = true;
-        setQueueBusy(false);
-        addEvent(success ? 'Toprak sürme tamamlandı' : message);
-      },
-    });
-  }, [addEvent, ros]);
-
-  // Çok adımlı görevler: Nav2 aynı anda tek hedef işler; kalan adımlar pendingStepsRef'te bekler.
-  // Meşgulken yeni görev reddedilir; mevcut adım bitince (timer) sıradaki otomatik dispatchGoal ile gider.
+  // queueBusy false: navigasyon bitti → ulaşılan step'in eylemi → eylem bitince sıradaki step veya görev sonu
   useEffect(() => {
     if (wasBusyRef.current && !queueBusy) {
       if (skipNextIdleEventRef.current) {
         skipNextIdleEventRef.current = false;
+        wasBusyRef.current = queueBusy;
+        return;
+      }
+
+      if (inStepActionRef.current) {
         wasBusyRef.current = queueBusy;
         return;
       }
@@ -246,58 +343,21 @@ export function NavigationProvider({ children }) {
         clearPlanPath();
         addEvent('Acil dur — navigasyon durduruldu');
         wasBusyRef.current = queueBusy;
-        return;  // acil dur — sıradaki adım gönderilmesin
+        return;
       }
 
       clearPlanPath();
 
-      const pending = pendingStepsRef.current;
-      const activeTask = activeTaskRef.current;
-
-      if (pending.length > 0 && activeTask) {
-        const nextStep = pending.shift();  // kuyruktan bir sonraki adımı al
-        const currentStep = activeTask.totalSteps - pending.length;
-        const progress = {
-          ...activeTask,
-          currentStep,
-        };
-
-        activeTaskRef.current = progress;
-        setActiveTaskProgress(progress);
-
-        const sourceLabel = `Görev: ${progress.taskName} - Adım ${currentStep}/${progress.totalSteps}`;
-        dispatchGoal(nextStep, sourceLabel);
-        addEvent(`Adım ${currentStep}/${progress.totalSteps}: ${progress.taskName}`);
-      } else if (activeTask) {
-        addEvent(`${activeTask.taskName} tamamlandı`);
-
-        // Navigasyon adımları bitti — görev tanımındaki finalAction'a göre sonraki davranış:
-        // wait → hiçbir şey (robot hazır); till → coverage ROS akışı;
-        // goto_charge / goto_base → henüz bağlanmadı, Son Olaylar'a bilgi notu
-        const finalActionType = activeTask.finalAction?.type || 'wait';
-        activeTaskRef.current = null;
-        setActiveTaskProgress(null);
-        pendingStepsRef.current = [];
-
-        if (finalActionType === 'till') {
-          runFinalActionTill();
-        } else if (finalActionType === 'goto_charge') {
-          console.warn('[finalAction] goto_charge henüz bağlanmadı — mühendisten action/servis bilgisi bekleniyor');
-          addEvent('Görev tamamlandı (Şarj İstasyonuna Git henüz aktif değil)');
-        } else if (finalActionType === 'goto_base') {
-          // TODO: base konumunun gerçek X/Y/Yaw'ı elimize geçince goto_base burada dispatchGoal ile bağlanacak.
-          console.warn('[finalAction] goto_base henüz bağlanmadı — base konumu koordinatı bekleniyor');
-          addEvent('Görev tamamlandı (Base Konuma Git henüz aktif değil)');
-        }
+      if (activeTaskRef.current) {
+        handleNavigationArrived();
       } else {
         addEvent('Görev tamamlandı');
       }
     }
 
     wasBusyRef.current = queueBusy;
-  }, [addEvent, clearPlanPath, dispatchGoal, queueBusy, runFinalActionTill]);
+  }, [addEvent, clearPlanPath, handleNavigationArrived, queueBusy]);
 
-  // ROS bağlantısı kesilip geri geldiğinde Son Olaylar paneline kayıt düşer.
   useEffect(() => {
     if (!connectionInitializedRef.current) {
       connectionInitializedRef.current = true;
@@ -313,7 +373,6 @@ export function NavigationProvider({ children }) {
     wasConnectedRef.current = isConnected;
   }, [addEvent, isConnected]);
 
-  // Bileşen kaldırılırken bekleyen timer'ları temizle (bellek sızıntısı önlemi).
   useEffect(() => () => {
     if (busyTimerRef.current) {
       window.clearTimeout(busyTimerRef.current);
@@ -323,13 +382,11 @@ export function NavigationProvider({ children }) {
     }
   }, []);
 
-  // useMemo: statusText yalnızca bağımlılıklar değişince yeniden hesaplanır.
   const statusText = useMemo(
     () => getStatusText({ isConnected, emergencyStopped, coverageStatus, queueBusy, activeTaskProgress }),
     [isConnected, emergencyStopped, coverageStatus, queueBusy, activeTaskProgress],
   );
 
-  // useMemo: Context value nesnesinin referansını sabit tutar; gereksiz alt bileşen render'ını azaltır.
   const value = useMemo(
     () => ({
       lastSentGoal,
@@ -367,7 +424,6 @@ export function NavigationProvider({ children }) {
   );
 }
 
-/** NavigationProvider dışında kullanılırsa hata fırlatır. */
 export function useNavigation() {
   const context = useContext(NavigationContext);
   if (!context) {
