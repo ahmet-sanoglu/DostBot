@@ -3,7 +3,7 @@
 // "Son Olaylar" görünür alanın dışında kalmasın diye (sayfa değil, panel içi scroll).
 // Görev listesi max-height + iç scroll ile joystick'i aşağı itmez.
 
-import React from 'react';
+import React, { useState } from 'react';
 import { INVALID_GOAL_MESSAGE } from '../../utils/mapPassability';
 import Joystick from '../Joystick';
 import RecentEventsPanel from './RecentEventsPanel';
@@ -17,9 +17,16 @@ function formatStepCount(steps) {
   return `${count} adım`;
 }
 
+/** Görev adımlarında Toprağı Sür (till) eylemi var mı? */
+function taskHasTillAction(task) {
+  const steps = Array.isArray(task?.steps) ? task.steps : [];
+  return steps.some((step) => step?.action?.type === 'till');
+}
+
 /**
  * Sağ kontrol paneli — harita yanında duran kartların kapsayıcısı.
- * Geofence doğrulaması burada değil; Başlat tıklanınca DashboardPage.onStartTask çalışır.
+ * Till onayı geofence'ten sonra sorulur: geçersiz hedefi önce elemek, operatörü gereksiz
+ * "toprak sürme geri alınamaz" uyarısıyla yormamak için (geçersiz rota zaten başlamaz).
  */
 export default function ControlPanel({
   activeMap,
@@ -27,6 +34,7 @@ export default function ControlPanel({
   tasksLoading,
   tasksError,
   mapReady,
+  onValidateTask,
   onStartTask,
   lastSentGoal,
   queueBusy,
@@ -35,10 +43,26 @@ export default function ControlPanel({
   showInvalidGoalPopup,
   onCloseInvalidGoalPopup,
 }) {
-  // Başlat → DashboardPage.onStartTask geofence sırası: 1) occupancy piksel 2) sınır poligonu 3) yasak dikdörtgen.
-  // Harita engeli önce elenir; mühendis tanımlı kısıtlar en sonda uygulanır (isWorldGoalPassable).
+  const [tillConfirmTask, setTillConfirmTask] = useState(null);
+
+  // Sıra bilinçli: geofence fail → invalid popup; geçince till varsa ikinci onay; yoksa direkt start
   const handleStartTask = (task) => {
+    if (!onValidateTask(task)) return;
+
+    if (taskHasTillAction(task)) {
+      setTillConfirmTask(task);
+      return;
+    }
+
     onStartTask(task);
+  };
+
+  const handleConfirmTillStart = () => {
+    const task = tillConfirmTask;
+    setTillConfirmTask(null);
+    if (task) {
+      onStartTask(task);
+    }
   };
 
   return (
@@ -138,6 +162,33 @@ export default function ControlPanel({
             >
               Tamam
             </button>
+          </div>
+        </div>
+      )}
+
+      {tillConfirmTask && (
+        <div className="queue-popup-backdrop" role="presentation">
+          <div className="queue-popup" role="alertdialog" aria-labelledby="till-confirm-title">
+            <h3 id="till-confirm-title">Toprak sürme uyarısı</h3>
+            <p>
+              Bu görev toprak sürme içeriyor ve geri alınamaz. Devam edilsin mi?
+            </p>
+            <div className="queue-popup__actions">
+              <button
+                type="button"
+                className="autonomous-btn autonomous-btn--ghost"
+                onClick={() => setTillConfirmTask(null)}
+              >
+                İptal
+              </button>
+              <button
+                type="button"
+                className="autonomous-btn"
+                onClick={handleConfirmTillStart}
+              >
+                Devam
+              </button>
+            </div>
           </div>
         </div>
       )}

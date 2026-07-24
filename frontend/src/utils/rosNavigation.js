@@ -1,21 +1,40 @@
 // Robot navigasyon hedeflerini ROS'a gönderir ve iptal eder.
-// Nav2 "action" (hedef + geri bildirim + iptal) birincil yol; /goal_pose topic'i yedek/uyumluluk içindir.
-// Acil Dur butonu aktif hedefi goal.cancel() ile iptal etmek için activeNavGoal referansını tutar.
+// rosbridge ROS 2 action feedback/result/cancel'ı güvenilir taşımadığı için durum takibi
+// /navigate_to_pose/_action/status topic'i ve iptal /_action/cancel_goal servisi ile yapılır.
+// ActionClient + Goal hâlâ hedef göndermek (ve yedek iptal) için kullanılır; /goal_pose topic yedek/uyumluluk içindir.
 
-import { ActionClient, Goal, Topic } from 'roslib';
+import { ActionClient, Goal, Service, Topic } from 'roslib';
 
 export const GOAL_POSE_TOPIC = '/goal_pose';
 export const NAV_ACTION_SERVER = '/navigate_to_pose';
 export const NAV_ACTION_TYPE = 'nav2_msgs/action/NavigateToPose';
+export const NAV_STATUS_TOPIC = '/navigate_to_pose/_action/status';
+export const NAV_STATUS_TYPE = 'action_msgs/msg/GoalStatusArray';
+export const NAV_CANCEL_SERVICE = '/navigate_to_pose/_action/cancel_goal';
+export const NAV_CANCEL_SERVICE_TYPE = 'action_msgs/srv/CancelGoal';
 
-/** ROS action iptal sonucu: action_msgs/GoalStatus STATUS_CANCELED = 6 */
-const GOAL_STATUS_CANCELED = 6;
+/** action_msgs/GoalStatus — terminal durumlar meşguliyeti kapatır */
+export const GOAL_STATUS = {
+  ACCEPTED: 1,
+  EXECUTING: 2,
+  SUCCEEDED: 4,
+  CANCELED: 5,
+  ABORTED: 6,
+};
+
+const TERMINAL_STATUSES = new Set([
+  GOAL_STATUS.SUCCEEDED,
+  GOAL_STATUS.CANCELED,
+  GOAL_STATUS.ABORTED,
+]);
 
 // ActionClient: ROS "action" protokolü için kalıcı istemci; her hedefte yeniden oluşturulmaz.
 let navigateActionClient = null;
 // Acil Dur iptali için son gönderilen Nav2 goal referansı — modül düzeyinde tutulur.
 let activeNavGoal = null;
 let cancelRequestedByEstop = false;
+let statusTopic = null;
+let statusTopicRos = null;
 
 /** Açıyı -π ile +π arasına sıkıştırır; robot yön hesaplarında taşmayı önler. */
 export function normalizeAngle(angle) {
@@ -47,7 +66,7 @@ function isCanceledActionResult(result) {
     ?? result?.status?.status
     ?? result?.goal_status?.status;
 
-  if (status === GOAL_STATUS_CANCELED || status === 'STATUS_CANCELED') {
+  if (status === GOAL_STATUS.CANCELED || status === 'STATUS_CANCELED') {
     return true;
   }
 
@@ -71,17 +90,90 @@ export function getActiveNavGoal() {
   return activeNavGoal;
 }
 
-// TopBar "Acil Dur" burayı çağırır; aktif Nav2 goal varsa goal.cancel() ile iptal eder.
-export function cancelActiveNavigationGoal() {
-  const goal = activeNavGoal;
-  if (!goal) {
-    return false;
+/**
+ * Nav2 action durum topic'ini dinler.
+ * status_list'in son elemanı güncel görev kabul edilir (Goal ID / stamp eşleştirmesi yok).
+ * Terminal status (4/5/6) NavigationContext'e iletilir; meşguliyet queueBusy ile yönetilir.
+ * Dönüş: abone olmayı kaldıran cleanup fonksiyonu.
+ */
+export function subscribeNavigationStatus(ros, onStatus) {
+  if (!ros || typeof onStatus !== 'function') {
+    return () => {};
   }
 
+  if (statusTopic && statusTopicRos === ros) {
+    statusTopic.unsubscribe();
+  }
+
+  statusTopic = new Topic({
+    ros,
+    name: NAV_STATUS_TOPIC,
+    messageType: NAV_STATUS_TYPE,
+  });
+  statusTopicRos = ros;
+
+  statusTopic.subscribe((message) => {
+    const list = message.status_list;
+    if (!Array.isArray(list) || list.length === 0) return;
+
+    // ID eşleştirme yok — dizideki son eleman güncel görev sayılır
+    const latest = list[list.length - 1];
+    const status = latest.status;
+    console.log('[navStatus] status:', status);
+
+    onStatus({
+      status,
+      succeeded: status === GOAL_STATUS.SUCCEEDED,
+      canceled: status === GOAL_STATUS.CANCELED,
+      aborted: status === GOAL_STATUS.ABORTED,
+      terminal: TERMINAL_STATUSES.has(status),
+    });
+  });
+
+  return () => {
+    if (statusTopic) {
+      statusTopic.unsubscribe();
+      statusTopic = null;
+      statusTopicRos = null;
+    }
+  };
+}
+
+/**
+ * TopBar "Acil Dur" burayı çağırır.
+ * 1) Varsa aktif Goal üzerinde goal.cancel() (rosbridge action yolu — yedek)
+ * 2) /navigate_to_pose/_action/cancel_goal servisi (birincil; boş goal_id = tüm aktif görevler)
+ */
+export function cancelActiveNavigationGoal(ros) {
   cancelRequestedByEstop = true;
-  console.log('[acilDur] Aktif Nav2 görevi iptal edildi');
-  goal.cancel();
-  return true;
+
+  const goal = activeNavGoal;
+  if (goal) {
+    console.log('[acilDur] Aktif Nav2 görevi iptal edildi (goal.cancel)');
+    goal.cancel();
+  }
+
+  if (ros) {
+    const cancelService = new Service({
+      ros,
+      name: NAV_CANCEL_SERVICE,
+      serviceType: NAV_CANCEL_SERVICE_TYPE,
+    });
+    // Boş goal_id = tüm aktif NavigateToPose görevlerini iptal et (ROS 2 CancelGoal standardı)
+    const request = {
+      goal_info: {
+        goal_id: { uuid: [] },
+        stamp: { sec: 0, nanosec: 0 },
+      },
+    };
+    cancelService.callService(request, (response) => {
+      console.log('[acilDur] cancel_goal servis cevabı:', response);
+    }, (error) => {
+      console.error('[acilDur] cancel_goal servis hatası:', error);
+    });
+  }
+
+  return Boolean(goal || ros);
 }
 
 /**
@@ -112,9 +204,9 @@ function publishGoalPoseTopic(ros, { x, y, yaw, frameId = 'map' }) {
 
 /**
  * Navigasyon hedefini robota gönderir.
- * 1) Nav2 action (birincil): geri bildirim, sonuç ve iptal destekler.
+ * 1) Nav2 action (birincil): hedef gönderimi; feedback/result rosbridge'te güvenilir olmayabilir.
  * 2) /goal_pose topic (paralel): RViz, eski scriptler veya action dinlemeyen araçlar için uyumluluk.
- * İkisi de aynı koordinatları taşır; asıl navigasyon Nav2 action üzerinden yürür.
+ * Durum takibi subscribeNavigationStatus ile /_action/status üzerinden yapılır.
  */
 export function publishNavigationGoal(ros, { x, y, yaw, frameId = 'map' }) {
   console.log('[sendNavigationGoal] başlatılıyor', { x, y, yaw, frameId });

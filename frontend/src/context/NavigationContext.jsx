@@ -12,10 +12,13 @@ import React, {
   useState,
 } from 'react';
 import { ROS_CONNECTED_STATUS, useRos } from './RosContext';
-import { cancelActiveNavigationGoal, publishNavigationGoal } from '../utils/rosNavigation';
+import {
+  cancelActiveNavigationGoal,
+  publishNavigationGoal,
+  subscribeNavigationStatus,
+} from '../utils/rosNavigation';
 import { startCoverageTask } from '../utils/coverageAction';
 
-const NAV_BUSY_MS = 8000;  // Nav2 yanıt bekleme süresi; sonrasında queueBusy false olur
 const MAX_EVENTS = 10;
 
 const NavigationContext = createContext(null);
@@ -87,12 +90,12 @@ export function NavigationProvider({ children }) {
   const [emergencyStopped, setEmergencyStopped] = useState(false);
   const [coverageStatus, setCoverageStatus] = useState(null);
 
-  const busyTimerRef = useRef(null);
   const estopResetTimerRef = useRef(null);
   const wasBusyRef = useRef(false);
   const estopTriggeredRef = useRef(false);
   const skipNextIdleEventRef = useRef(false);
   const inStepActionRef = useRef(false);  // till gibi uzun eylem sürerken nav-tamamlandı effect'ini yutar
+  const queueBusyRef = useRef(false);  // status callback'te güncel meşguliyet (stale closure önlemi)
   const wasConnectedRef = useRef(status === ROS_CONNECTED_STATUS);
   const connectionInitializedRef = useRef(false);
   const pendingStepsRef = useRef([]);
@@ -100,6 +103,8 @@ export function NavigationProvider({ children }) {
   const proceedAfterStepActionRef = useRef(null);
 
   const isConnected = status === ROS_CONNECTED_STATUS;
+
+  queueBusyRef.current = queueBusy;
 
   const addEvent = useCallback((message) => {
     const entry = {
@@ -116,15 +121,8 @@ export function NavigationProvider({ children }) {
 
     clearPlanPath();
     setLastSentGoal({ ...goal, source: sourceLabel });
+    // Meşguliyet /navigate_to_pose/_action/status terminal durumuna (4/5/6) kadar sürer
     setQueueBusy(true);
-
-    if (busyTimerRef.current) {
-      window.clearTimeout(busyTimerRef.current);
-    }
-    busyTimerRef.current = window.setTimeout(() => {
-      setQueueBusy(false);
-      busyTimerRef.current = null;
-    }, NAV_BUSY_MS);
 
     return true;
   }, [clearPlanPath, ros]);
@@ -147,12 +145,7 @@ export function NavigationProvider({ children }) {
   }, [addEvent, dispatchGoal, queueBusy]);
 
   const emergencyStopNavigation = useCallback(() => {
-    cancelActiveNavigationGoal();
-
-    if (busyTimerRef.current) {
-      window.clearTimeout(busyTimerRef.current);
-      busyTimerRef.current = null;
-    }
+    cancelActiveNavigationGoal(ros);
 
     pendingStepsRef.current = [];
     activeTaskRef.current = null;
@@ -174,7 +167,7 @@ export function NavigationProvider({ children }) {
       setEmergencyStopped(false);
       estopResetTimerRef.current = null;
     }, 4000);
-  }, [clearPlanPath]);
+  }, [clearPlanPath, ros]);
 
   /** Step eylemi bittikten sonra kuyruktaki bir sonraki navigasyon hedefini gönderir veya görevi kapatır. */
   const proceedAfterStepAction = useCallback(() => {
@@ -273,7 +266,7 @@ export function NavigationProvider({ children }) {
     proceed();
   }, [addEvent, ros]);
 
-  /** Nav2 hedefi tamamlandı (timer) — az önce varılan noktanın eylemini tetikler. */
+  /** Nav2 hedefi tamamlandı (status topic) — az önce varılan noktanın eylemini tetikler. */
   const handleNavigationArrived = useCallback(() => {
     const activeTask = activeTaskRef.current;
     if (!activeTask) {
@@ -323,6 +316,20 @@ export function NavigationProvider({ children }) {
     }
     return sent;
   }, [addEvent, dispatchGoal, queueBusy]);
+
+  // Nav2 /_action/status: tek aktif görev (queueBusy) varken terminal (4/5/6) → meşguliyeti kapat
+  useEffect(() => {
+    if (!ros || !isConnected) return undefined;
+
+    return subscribeNavigationStatus(ros, ({ terminal }) => {
+      if (!terminal) return;
+      // till sırasında queueBusy true kalır; eski SUCCEEDED navigasyonu bitmiş saymasın
+      if (inStepActionRef.current) return;
+      if (!queueBusyRef.current) return;
+
+      setQueueBusy(false);
+    });
+  }, [isConnected, ros]);
 
   // queueBusy false: navigasyon bitti → ulaşılan step'in eylemi → eylem bitince sıradaki step veya görev sonu
   useEffect(() => {
@@ -374,9 +381,6 @@ export function NavigationProvider({ children }) {
   }, [addEvent, isConnected]);
 
   useEffect(() => () => {
-    if (busyTimerRef.current) {
-      window.clearTimeout(busyTimerRef.current);
-    }
     if (estopResetTimerRef.current) {
       window.clearTimeout(estopResetTimerRef.current);
     }

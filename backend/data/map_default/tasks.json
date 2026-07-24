@@ -1,16 +1,5 @@
 [
   {
-    "id": "task_1",
-    "name": "Test Noktasına Git",
-    "steps": [
-      {
-        "x": 0.16,
-        "y": 0.32,
-        "yaw": 0
-      }
-    ]
-  },
-  {
     "id": "task_d3db0c55",
     "name": "iceri",
     "steps": [
@@ -45,7 +34,44 @@
     ]
   },
   {
-    "id": "task_c4406068",
+    "id": "task_945c04ef",
+    "name": "zincir testi",
+    "steps": [
+      {
+        "x": 1.0,
+        "y": 0.0,
+        "yaw": 0.0,
+        "action": {
+          "type": "wait"
+        }
+      },
+      {
+        "x": 2.0,
+        "y": 0.0,
+        "yaw": 0.0,
+        "action": {
+          "type": "wait"
+        }
+      }
+    ]
+  },
+  {
+    "id": "task_d03ebfd5",
+    "name": "Test Noktası",
+    "locationId": "loc_0d72edd3",
+    "steps": [
+      {
+        "x": 1.0,
+        "y": 1.2,
+        "yaw": 0.0,
+        "action": {
+          "type": "wait"
+        }
+      }
+    ]
+  },
+  {
+    "id": "task_bad94802",
     "name": "Togragi Sur",
     "steps": [
       {

@@ -1,7 +1,7 @@
 // Mühendis Paneli ana sayfası — PIN korumalı konum/görev/sınır yönetimi.
 // PIN doğrulandıktan sonra harita verileri yüklenir; mini haritada geofence çizilebilir.
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   createMapLocation,
   createMapTask,
@@ -22,13 +22,88 @@ import StatusCard from '../components/dashboard/StatusCard';
 import AddLocationModal from '../components/engineer/AddLocationModal';
 import AddTaskModal from '../components/engineer/AddTaskModal';
 import BoundarySettings from '../components/engineer/BoundarySettings';
+import ConfirmDialog from '../components/engineer/ConfirmDialog';
 import EngineerMiniMap from '../components/engineer/EngineerMiniMap';
 import EngineerPinGate, { useEngineerAuth } from '../components/engineer/EngineerPinGate';
 import MapSelectorDropdown from '../components/engineer/MapSelectorDropdown';
+import UndoToast from '../components/engineer/UndoToast';
+
+/** x/y eşleşmesi — çok adımlı görev adımlarında locationId yok; yalnızca koordinat taşınıyor. */
+const COORD_MATCH_TOLERANCE = 1e-3;
 
 /** Yaw radyanını derece metnine çevirir (konum listesinde gösterim). */
 function formatYawDegrees(yaw) {
   return ((yaw * 180) / Math.PI).toFixed(1);
+}
+
+function coordsMatchXY(a, b, tolerance = COORD_MATCH_TOLERANCE) {
+  return (
+    Math.abs(Number(a.x) - Number(b.x)) <= tolerance
+    && Math.abs(Number(a.y) - Number(b.y)) <= tolerance
+  );
+}
+
+/**
+ * Konum silinmeden önce: bu x/y hangi çok adımlı görevlerin steps'inde geçiyor?
+ * locationId ile bakılmaz — çok adımlı görevler adımları düz koordinat olarak tutar, locationId alanı yok.
+ * Tek adımlı otomatik görevler hariç (konumla birlikte backend zaten siler); uyarı yalnızca rota bağımlılığı için.
+ */
+function findMultiStepTasksUsingLocation(location, tasks) {
+  if (!location || typeof location.x !== 'number' || typeof location.y !== 'number') {
+    return [];
+  }
+
+  return (Array.isArray(tasks) ? tasks : []).filter((task) => {
+    const steps = Array.isArray(task?.steps) ? task.steps : [];
+    if (steps.length <= 1) return false;
+    return steps.some((step) => (
+      typeof step?.x === 'number'
+      && typeof step?.y === 'number'
+      && coordsMatchXY(step, location)
+    ));
+  });
+}
+
+/** ConfirmDialog mesajı — konumda usedInTasks varsa rota uyarısı eklenir. */
+function buildDeleteConfirmMessage(target) {
+  if (!target) return '';
+
+  if (target.type === 'task') {
+    return `"${target.name}" adlı görevi silmek istediğinize emin misiniz? Bu işlem geri alınamaz.`;
+  }
+
+  let message = `"${target.name}" adlı konumu silmek istediğinize emin misiniz? Bu işlem geri alınamaz.`;
+  if (Array.isArray(target.usedInTasks) && target.usedInTasks.length > 0) {
+    message += ` Bu konum şu görevlerde de kullanılıyor: ${target.usedInTasks.join(', ')}. Yine de silmek istiyor musunuz?`;
+  }
+  return message;
+}
+
+/** Geri alma POST'u için id'siz konum gövdesi. */
+function toLocationCreatePayload(location) {
+  return {
+    name: location.name,
+    x: location.x,
+    y: location.y,
+    yaw: location.yaw,
+  };
+}
+
+/** Geri alma POST'u için id'siz görev gövdesi. */
+function toTaskCreatePayload(task) {
+  const payload = {
+    name: task.name,
+    steps: (Array.isArray(task.steps) ? task.steps : []).map((step) => ({
+      x: step.x,
+      y: step.y,
+      yaw: step.yaw,
+      action: { type: step.action?.type || 'wait' },
+    })),
+  };
+  if (typeof task.description === 'string' && task.description.trim()) {
+    payload.description = task.description.trim();
+  }
+  return payload;
 }
 
 /** Mühendis paneli (/muhendis) — konum, görev, geofence CRUD. */
@@ -57,6 +132,20 @@ export default function EngineerPage() {
   const [boundaryDraftClosed, setBoundaryDraftClosed] = useState(false);
   const [boundarySaving, setBoundarySaving] = useState(false);
   const [boundaryError, setBoundaryError] = useState('');
+  /** Silinecek hedef; null = ConfirmDialog kapalı. Direkt silmek yerine önce onay için tutulur. */
+  const [confirmTarget, setConfirmTarget] = useState(null);
+  /** Undo toast görünür metni: { name } veya null */
+  const [undoToast, setUndoToast] = useState(null);
+  /**
+   * Geri alma için silinen nesnenin snapshot'ı (DELETE öncesi kopya).
+   * Toast 6 sn veya yeni bir mühendis işlemi gelince clearPendingUndo ile düşer — süre dolunca POST yapılamaz.
+   */
+  const pendingUndoRef = useRef(null);
+
+  const clearPendingUndo = useCallback(() => {
+    pendingUndoRef.current = null;
+    setUndoToast(null);
+  }, []);
 
   /** Aktif haritanın konum, görev ve sınır verilerini backend'den yeniden yükler. */
   const loadMapData = useCallback(async () => {
@@ -89,6 +178,7 @@ export default function EngineerPage() {
   /** Yeni konum ekler veya düzenleme modunda mevcut konumu günceller. */
   const handleSaveLocation = async (location, mode = 'create') => {
     if (!activeMap) return false;
+    clearPendingUndo();
     setLocationSaving(true);
     setLocationModalError('');
     try {
@@ -112,6 +202,7 @@ export default function EngineerPage() {
 
   /** Konum düzenleme modalını açar — PUT sonrası backend otomatik görevi de senkronize eder. */
   const handleEditLocation = (location) => {
+    clearPendingUndo();
     setLocationModalMode('edit');
     setEditingLocation(location);
     setLocationModalError('');
@@ -126,6 +217,7 @@ export default function EngineerPage() {
   };
 
   const handleOpenCreateLocationModal = () => {
+    clearPendingUndo();
     setLocationModalMode('create');
     setEditingLocation(null);
     setLocationModalError('');
@@ -140,12 +232,14 @@ export default function EngineerPage() {
       await loadMapData();
     } catch (err) {
       setLoadError(err.message || 'Konum silinemedi.');
+      throw err;
     }
   };
 
   /** Yeni görev ekler veya düzenleme modunda mevcut görevi günceller. */
   const handleSaveTask = async (task, mode = 'create') => {
     if (!activeMap) return false;
+    clearPendingUndo();
     setTaskSaving(true);
     setTaskModalError('');
     try {
@@ -169,23 +263,94 @@ export default function EngineerPage() {
 
   /** Görev düzenleme modalını açar. */
   const handleEditTask = (task) => {
+    clearPendingUndo();
     setTaskModalMode('edit');
     setEditingTask(task);
     setTaskModalError('');
     setTaskModalOpen(true);
   };
 
-  /** Görevi siler (onay ile). */
+  /** Görevi siler. */
   const handleDeleteTask = async (taskId) => {
     if (!activeMap) return;
-    if (!window.confirm('Bu görevi silmek istediğinize emin misiniz?')) {
-      return;
-    }
     try {
       await deleteMapTask(activeMap.id, taskId);
       await loadMapData();
     } catch (err) {
       setLoadError(err.message || 'Görev silinemedi.');
+      throw err;
+    }
+  };
+
+  /** Sil butonu → ConfirmDialog aç; silme API'si burada çağrılmaz (yanlış tıklamayı önlemek için). */
+  const requestDeleteLocation = (location) => {
+    clearPendingUndo();
+    const usedTasks = findMultiStepTasksUsingLocation(location, tasks);
+    setConfirmTarget({
+      type: 'location',
+      id: location.id,
+      name: location.name || 'Konum',
+      usedInTasks: usedTasks.map((task) => task.name || 'Adsız görev'),
+    });
+  };
+
+  const requestDeleteTask = (task) => {
+    clearPendingUndo();
+    setConfirmTarget({
+      type: 'task',
+      id: task.id,
+      name: task.name || 'Görev',
+    });
+  };
+
+  /**
+   * ConfirmDialog "Sil": önce snapshot → DELETE → toast.
+   * Snapshot DELETE'ten önce alınır; geri alma yeni POST ile (yeni id) yeniden oluşturur.
+   */
+  const handleConfirmDelete = async () => {
+    if (!confirmTarget || !activeMap) return;
+
+    const { type, id } = confirmTarget;
+    const entity = type === 'location'
+      ? locations.find((location) => location.id === id)
+      : tasks.find((task) => task.id === id);
+
+    setConfirmTarget(null);
+    if (!entity) return;
+
+    const snapshot = JSON.parse(JSON.stringify(entity));
+    const displayName = entity.name || (type === 'location' ? 'Konum' : 'Görev');
+
+    try {
+      if (type === 'location') {
+        await handleDeleteLocation(id);
+      } else {
+        await handleDeleteTask(id);
+      }
+
+      pendingUndoRef.current = { type, data: snapshot };
+      setUndoToast({ name: displayName });
+    } catch {
+      // Hata mesajı delete handler'da setLoadError ile yazıldı
+      clearPendingUndo();
+    }
+  };
+
+  /** Toast "Geri Al": pendingUndoRef'teki snapshot ile POST; id bilerek gönderilmez (backend yeni üretir). */
+  const handleUndoDelete = async () => {
+    const pending = pendingUndoRef.current;
+    if (!pending || !activeMap) return;
+
+    clearPendingUndo();
+    try {
+      if (pending.type === 'location') {
+        await createMapLocation(activeMap.id, toLocationCreatePayload(pending.data));
+      } else if (pending.type === 'task') {
+        await createMapTask(activeMap.id, toTaskCreatePayload(pending.data));
+      }
+      await loadMapData();
+    } catch (err) {
+      setLoadError(err.message || 'Geri alma başarısız.');
     }
   };
 
@@ -197,6 +362,7 @@ export default function EngineerPage() {
   };
 
   const handleOpenCreateTaskModal = () => {
+    clearPendingUndo();
     setTaskModalMode('create');
     setEditingTask(null);
     setTaskModalError('');
@@ -205,6 +371,7 @@ export default function EngineerPage() {
 
   /** Mini haritada geofence poligonu çizmeye başlar. */
   const handleStartBoundaryDraw = () => {
+    clearPendingUndo();
     setBoundaryError('');
     setBoundaryDrawMode(true);
     setBoundaryDraft([]);
@@ -234,6 +401,7 @@ export default function EngineerPage() {
   /** Taslak poligonu boundary.json olarak backend'e yazar. */
   const handleSaveBoundary = async () => {
     if (!activeMap || boundaryDraft.length < 3) return;
+    clearPendingUndo();
     setBoundarySaving(true);
     setBoundaryError('');
     try {
@@ -251,6 +419,7 @@ export default function EngineerPage() {
   /** Kayıtlı geofence sınırını backend'den kaldırır. */
   const handleDeleteBoundary = async () => {
     if (!activeMap) return;
+    clearPendingUndo();
     setBoundarySaving(true);
     setBoundaryError('');
     try {
@@ -345,7 +514,7 @@ export default function EngineerPage() {
                     <button
                       type="button"
                       className="autonomous-btn autonomous-btn--ghost autonomous-btn--small"
-                      onClick={() => handleDeleteLocation(location.id)}
+                      onClick={() => requestDeleteLocation(location)}
                     >
                       Sil
                     </button>
@@ -406,7 +575,7 @@ export default function EngineerPage() {
                     <button
                       type="button"
                       className="autonomous-btn autonomous-btn--ghost autonomous-btn--small"
-                      onClick={() => handleDeleteTask(task.id)}
+                      onClick={() => requestDeleteTask(task)}
                     >
                       Sil
                     </button>
@@ -458,6 +627,21 @@ export default function EngineerPage() {
         error={taskModalError}
         mode={taskModalMode}
         initialTask={editingTask}
+      />
+
+      <ConfirmDialog
+        open={Boolean(confirmTarget)}
+        title={confirmTarget?.type === 'task' ? 'Görev Sil' : 'Konum Sil'}
+        message={buildDeleteConfirmMessage(confirmTarget)}
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setConfirmTarget(null)}
+      />
+
+      <UndoToast
+        open={Boolean(undoToast)}
+        message={undoToast ? `${undoToast.name} silindi` : ''}
+        onUndo={handleUndoDelete}
+        onDismiss={clearPendingUndo}
       />
     </div>
   );

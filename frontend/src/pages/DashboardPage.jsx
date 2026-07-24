@@ -38,8 +38,9 @@ export default function DashboardPage() {
    * 2) Geofence poligonu — mühendisin çizdiği sınır dışı elenir
    * 3) Yasak dikdörtgen — forbidden_zones.json ile tanımlı bölgeler elenir
    * Sıra: ucuz harita kontrolü önce; mühendis kısıtları en sonda uygulanır.
+   * Till onayı ControlPanel'de bu kontrolden sonra, startTask'tan önce sorulur.
    */
-  const handleStartTask = useCallback((task) => {
+  const validateTaskGoals = useCallback((task) => {
     if (!mapReady) return false;
 
     const steps = Array.isArray(task.steps) ? task.steps : [];
@@ -53,8 +54,13 @@ export default function DashboardPage() {
       }
     }
 
+    return true;
+  }, [isGoalPassable, mapReady]);
+
+  const handleStartTask = useCallback((task) => {
+    if (!validateTaskGoals(task)) return false;
     return startTask(task);
-  }, [isGoalPassable, mapReady, startTask]);
+  }, [startTask, validateTaskGoals]);
 
   return (
     <div className={`main-content${showDebugTelemetry ? ' main-content--debug' : ''}`}>
@@ -70,6 +76,7 @@ export default function DashboardPage() {
         tasksLoading={mapDataLoading}
         tasksError={mapDataError}
         mapReady={mapReady}
+        onValidateTask={validateTaskGoals}
         onStartTask={handleStartTask}
         lastSentGoal={lastSentGoal}
         queueBusy={queueBusy}

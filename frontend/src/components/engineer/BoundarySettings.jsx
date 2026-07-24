@@ -1,7 +1,8 @@
 // Geofence (geçilebilir alan sınırı) çizim ve kaydetme kontrolleri.
 // EngineerMiniMap ile birlikte çalışır; operatör hedefleri bu poligon içinde olmalıdır.
 
-import React from 'react';
+import React, { useState } from 'react';
+import ConfirmDialog from './ConfirmDialog';
 
 /** Sınır çizme modu, kaydetme ve silme butonlarını yönetir. */
 export default function BoundarySettings({
@@ -17,8 +18,14 @@ export default function BoundarySettings({
   onSave,
   onDelete,
 }) {
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const hasSavedBoundary = Boolean(boundaryPolygon?.length >= 3);
   const hasDraftToSave = !drawMode && draftClosed && draftVertices.length >= 3;
+
+  const handleConfirmDelete = () => {
+    setConfirmDeleteOpen(false);
+    onDelete();
+  };
 
   return (
     <div className="boundary-settings">
@@ -85,7 +92,7 @@ export default function BoundarySettings({
             <button
               type="button"
               className="autonomous-btn autonomous-btn--ghost autonomous-btn--small"
-              onClick={onDelete}
+              onClick={() => setConfirmDeleteOpen(true)}
               disabled={saving}
             >
               Sınırı Sil
@@ -93,6 +100,14 @@ export default function BoundarySettings({
           )}
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmDeleteOpen}
+        title="Sınırı Sil"
+        message="Geçilebilir alan sınırını silmek istediğinize emin misiniz? Bu, operatör panelindeki hedef kısıtlamasını kaldırır."
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setConfirmDeleteOpen(false)}
+      />
     </div>
   );
 }
