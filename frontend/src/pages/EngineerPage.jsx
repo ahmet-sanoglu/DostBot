@@ -1,10 +1,15 @@
-// Mühendis Paneli ana sayfası — PIN korumalı konum/görev/sınır yönetimi.
+// Mühendis Paneli ana sayfası — PIN korumalı konum/görev/sınır/yasak bölge yönetimi.
 // PIN doğrulandıktan sonra harita verileri yüklenir; mini haritada geofence çizilebilir.
+// Kaydırma: .engineer-page height:100% + overflow-y:auto (App.css) — üstteki
+// .workspace__content overflow:hidden olduğu için içerik uzayınca sayfa kayamazdı;
+// sabit 100vh yerine esnek yükseklik + iç scroll ile Ayarlar kartı erişilebilir kalır.
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  createForbiddenZone,
   createMapLocation,
   createMapTask,
+  deleteForbiddenZone,
   deleteMapBoundary,
   deleteMapLocation,
   deleteMapTask,
@@ -15,6 +20,7 @@ import {
 import {
   fetchActiveMap,
   fetchMapBoundary,
+  fetchMapForbiddenZones,
   fetchMapLocations,
   fetchMapTasks,
 } from '../utils/mapApi';
@@ -23,6 +29,7 @@ import AddLocationModal from '../components/engineer/AddLocationModal';
 import AddTaskModal from '../components/engineer/AddTaskModal';
 import BoundarySettings from '../components/engineer/BoundarySettings';
 import ConfirmDialog from '../components/engineer/ConfirmDialog';
+import ForbiddenZoneSettings from '../components/engineer/ForbiddenZoneSettings';
 import EngineerMiniMap from '../components/engineer/EngineerMiniMap';
 import EngineerPinGate, { useEngineerAuth } from '../components/engineer/EngineerPinGate';
 import MapSelectorDropdown from '../components/engineer/MapSelectorDropdown';
@@ -113,6 +120,7 @@ export default function EngineerPage() {
   const [locations, setLocations] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [boundaryPolygon, setBoundaryPolygon] = useState(null);
+  const [forbiddenZones, setForbiddenZones] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
 
@@ -132,6 +140,14 @@ export default function EngineerPage() {
   const [boundaryDraftClosed, setBoundaryDraftClosed] = useState(false);
   const [boundarySaving, setBoundarySaving] = useState(false);
   const [boundaryError, setBoundaryError] = useState('');
+  /** Yasak dikdörtgen çizimi — geofence drawMode'dan ayrı state; aynı anda karışmasın diye. */
+  const [forbiddenDrawMode, setForbiddenDrawMode] = useState(false);
+  /** İlk köşe; ikinci tıklamada pendingRect üretilir, sonra isim formu açılır. */
+  const [forbiddenCorner, setForbiddenCorner] = useState(null);
+  /** İsim bekleyen dikdörtgen (xMin..yMax); çizim bitince set edilir. */
+  const [forbiddenPendingRect, setForbiddenPendingRect] = useState(null);
+  const [zoneSaving, setZoneSaving] = useState(false);
+  const [zoneError, setZoneError] = useState('');
   /** Silinecek hedef; null = ConfirmDialog kapalı. Direkt silmek yerine önce onay için tutulur. */
   const [confirmTarget, setConfirmTarget] = useState(null);
   /** Undo toast görünür metni: { name } veya null */
@@ -147,21 +163,23 @@ export default function EngineerPage() {
     setUndoToast(null);
   }, []);
 
-  /** Aktif haritanın konum, görev ve sınır verilerini backend'den yeniden yükler. */
+  /** Aktif haritanın konum, görev, sınır ve yasak bölge verilerini backend'den yeniden yükler. */
   const loadMapData = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
     try {
       const map = await fetchActiveMap();
-      const [mapLocations, mapTasks, mapBoundary] = await Promise.all([
+      const [mapLocations, mapTasks, mapBoundary, mapForbiddenZones] = await Promise.all([
         fetchMapLocations(map.id),
         fetchMapTasks(map.id),
         fetchMapBoundary(map.id),
+        fetchMapForbiddenZones(map.id),
       ]);
       setActiveMap(map);
       setLocations(Array.isArray(mapLocations) ? mapLocations : []);
       setTasks(Array.isArray(mapTasks) ? mapTasks : []);
       setBoundaryPolygon(mapBoundary);
+      setForbiddenZones(Array.isArray(mapForbiddenZones) ? mapForbiddenZones : []);
     } catch (err) {
       setLoadError(err.message || 'Harita verileri yüklenemedi.');
     } finally {
@@ -372,6 +390,11 @@ export default function EngineerPage() {
   /** Mini haritada geofence poligonu çizmeye başlar. */
   const handleStartBoundaryDraw = () => {
     clearPendingUndo();
+    // Yasak bölge çizimi açıksa kapat — iki mod aynı anda çalışmasın
+    setForbiddenDrawMode(false);
+    setForbiddenCorner(null);
+    setForbiddenPendingRect(null);
+    setZoneError('');
     setBoundaryError('');
     setBoundaryDrawMode(true);
     setBoundaryDraft([]);
@@ -434,6 +457,92 @@ export default function EngineerPage() {
     }
   };
 
+  /** Yasak dikdörtgen çizimine başlar (2 tık); geofence çizimini kapatır. */
+  const handleStartForbiddenDraw = () => {
+    clearPendingUndo();
+    setBoundaryDrawMode(false);
+    setBoundaryDraft([]);
+    setBoundaryDraftClosed(false);
+    setBoundaryError('');
+    setZoneError('');
+    setForbiddenPendingRect(null);
+    setForbiddenCorner(null);
+    setForbiddenDrawMode(true);
+  };
+
+  const handleCancelForbiddenDraw = () => {
+    setForbiddenDrawMode(false);
+    setForbiddenCorner(null);
+    setForbiddenPendingRect(null);
+    setZoneError('');
+  };
+
+  /**
+   * Yasak bölge tıklaması: 1. köşe saklanır, 2. köşe dikdörtgeni bitirir → isim formu.
+   * Aynı nokta (sıfır alan) yok sayılır.
+   */
+  const handleForbiddenCornerClick = (point) => {
+    if (!forbiddenCorner) {
+      setForbiddenCorner({ x: point.x, y: point.y });
+      return;
+    }
+
+    const xMin = Math.min(forbiddenCorner.x, point.x);
+    const xMax = Math.max(forbiddenCorner.x, point.x);
+    const yMin = Math.min(forbiddenCorner.y, point.y);
+    const yMax = Math.max(forbiddenCorner.y, point.y);
+
+    if (!(xMin < xMax && yMin < yMax)) {
+      return;
+    }
+
+    setForbiddenPendingRect({ xMin, xMax, yMin, yMax });
+    setForbiddenDrawMode(false);
+    setForbiddenCorner(null);
+  };
+
+  const handleCancelForbiddenPending = () => {
+    setForbiddenPendingRect(null);
+    setZoneError('');
+  };
+
+  /** İsim + çizilen dikdörtgen → createForbiddenZone. */
+  const handleSaveForbiddenPending = async (zone) => {
+    if (!activeMap) return false;
+    clearPendingUndo();
+    setZoneSaving(true);
+    setZoneError('');
+    try {
+      await createForbiddenZone(activeMap.id, zone);
+      setForbiddenPendingRect(null);
+      await loadMapData();
+      return true;
+    } catch (err) {
+      setZoneError(err.message || 'Yasaklı bölge kaydedilemedi.');
+      return false;
+    } finally {
+      setZoneSaving(false);
+    }
+  };
+
+  /** Tek yasak bölgeyi siler (ConfirmDialog onayı ForbiddenZoneSettings içinde). */
+  const handleDeleteForbiddenZone = async (zoneId) => {
+    if (!activeMap) return;
+    clearPendingUndo();
+    setZoneSaving(true);
+    setZoneError('');
+    try {
+      await deleteForbiddenZone(activeMap.id, zoneId);
+      await loadMapData();
+    } catch (err) {
+      setZoneError(err.message || 'Yasaklı bölge silinemedi.');
+    } finally {
+      setZoneSaving(false);
+    }
+  };
+
+  const mapDrawActive = boundaryDrawMode || forbiddenDrawMode;
+
   if (!authenticated) {
     return (
       <EngineerPinGate onAuthenticated={() => setAuthenticated(true)} />
@@ -441,6 +550,7 @@ export default function EngineerPage() {
   }
 
   return (
+    // Kaydırma kabı: class App.css'te height/overflow ile tanımlı — parent clip'ini aşmak için
     <div className="engineer-page">
       <div className="engineer-page__toolbar">
         <MapSelectorDropdown activeMap={activeMap} />
@@ -451,7 +561,7 @@ export default function EngineerPage() {
       )}
 
       <div className="engineer-page__strip">
-        <div className={`engineer-page__mini panel-card${boundaryDrawMode ? ' engineer-page__mini--draw' : ''}`}>
+        <div className={`engineer-page__mini panel-card${mapDrawActive ? ' engineer-page__mini--draw' : ''}`}>
           <div className="panel-card__title panel-card__title--compact">
             <span className="panel-card__icon">🗺️</span>
             Harita
@@ -464,6 +574,11 @@ export default function EngineerPage() {
             drawMode={boundaryDrawMode}
             onVertexAdd={handleBoundaryVertexAdd}
             onDrawFinish={handleFinishBoundaryDraw}
+            forbiddenZones={forbiddenZones}
+            forbiddenDrawMode={forbiddenDrawMode}
+            forbiddenCorner={forbiddenCorner}
+            forbiddenDraftRect={forbiddenPendingRect}
+            onForbiddenCornerClick={handleForbiddenCornerClick}
           />
         </div>
 
@@ -593,19 +708,35 @@ export default function EngineerPage() {
               Ayarlar
             </div>
           </div>
-          <BoundarySettings
-            boundaryPolygon={boundaryPolygon}
-            drawMode={boundaryDrawMode}
-            draftVertices={boundaryDraft}
-            draftClosed={boundaryDraftClosed}
-            saving={boundarySaving}
-            error={boundaryError}
-            onStartDraw={handleStartBoundaryDraw}
-            onFinishDraw={handleFinishBoundaryDraw}
-            onCancelDraw={handleCancelBoundaryDraw}
-            onSave={handleSaveBoundary}
-            onDelete={handleDeleteBoundary}
-          />
+          <div className="engineer-settings__section">
+            <BoundarySettings
+              boundaryPolygon={boundaryPolygon}
+              drawMode={boundaryDrawMode}
+              draftVertices={boundaryDraft}
+              draftClosed={boundaryDraftClosed}
+              saving={boundarySaving}
+              error={boundaryError}
+              onStartDraw={handleStartBoundaryDraw}
+              onFinishDraw={handleFinishBoundaryDraw}
+              onCancelDraw={handleCancelBoundaryDraw}
+              onSave={handleSaveBoundary}
+              onDelete={handleDeleteBoundary}
+            />
+          </div>
+          <div className="engineer-settings__section">
+            <ForbiddenZoneSettings
+              zones={forbiddenZones}
+              saving={zoneSaving}
+              error={zoneError}
+              drawMode={forbiddenDrawMode}
+              pendingRect={forbiddenPendingRect}
+              onStartDraw={handleStartForbiddenDraw}
+              onCancelDraw={handleCancelForbiddenDraw}
+              onSavePending={handleSaveForbiddenPending}
+              onCancelPending={handleCancelForbiddenPending}
+              onDelete={handleDeleteForbiddenZone}
+            />
+          </div>
         </section>
       </div>
 

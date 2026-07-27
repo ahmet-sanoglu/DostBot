@@ -1239,8 +1239,13 @@
   display: flex;
   flex-direction: column;
   gap: 18px;
-  min-height: 100%;
+  /* workspace__content overflow:hidden — sabit 100vh yerine height:100% + overflow-y:auto;
+     içerik (yasak bölge formu vb.) uzayınca sayfa kayabilsin, parent clip etmesin. */
+  box-sizing: border-box;
+  height: 100%;
+  min-height: 0;
   padding: 24px;
+  overflow-x: hidden;
   overflow-y: auto;
   background: var(--color-bg-subtle);
 }
@@ -1404,6 +1409,27 @@
   text-align: center;
 }
 
+.engineer-mini-map__tooltip {
+  position: absolute;
+  z-index: 3;
+  padding: 6px 8px;
+  border-radius: var(--radius-md);
+  background: rgba(15, 23, 42, 0.92);
+  color: #f8fafc;
+  font-size: 0.6875rem;
+  line-height: 1.35;
+  pointer-events: none;
+  white-space: nowrap;
+  transform: translate(8px, -110%);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.25);
+}
+
+.engineer-mini-map__tooltip strong {
+  display: block;
+  margin-bottom: 2px;
+  font-weight: var(--font-weight-medium);
+}
+
 .engineer-page__mini--draw {
   width: fit-content;
   max-width: 100%;
@@ -1421,6 +1447,42 @@
   gap: 8px;
 }
 
+.engineer-settings__section + .engineer-settings__section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 0.5px solid var(--color-border);
+}
+
+.forbidden-zone-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.forbidden-zone-settings__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.forbidden-zone-settings__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 0.5px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+}
+
+.forbidden-zone-settings__form {
+  margin-top: 4px;
+}
+
 .engineer-mini-map__error {
   position: absolute;
   inset: 0;
@@ -1436,8 +1498,7 @@
 }
 
 .engineer-page__main {
-  flex: 1;
-  min-height: 0;
+  flex: 0 0 auto;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 20px;

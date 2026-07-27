@@ -133,3 +133,23 @@ export async function deleteMapBoundary(mapId) {
     headers: adminHeaders(),
   });
 }
+
+/** Dikdörtgen yasak bölge ekler (geofence'ten farklı: birden fazla bölge tutulabilir). */
+export async function createForbiddenZone(mapId, zone) {
+  return fetchJson(`${API_BASE}/api/maps/${encodeURIComponent(mapId)}/forbidden-zones`, {
+    method: 'POST',
+    headers: adminHeaders(),
+    body: JSON.stringify(zone),
+  });
+}
+
+/** Tek bir yasak bölgeyi ID ile siler. */
+export async function deleteForbiddenZone(mapId, zoneId) {
+  return fetchJson(
+    `${API_BASE}/api/maps/${encodeURIComponent(mapId)}/forbidden-zones/${encodeURIComponent(zoneId)}`,
+    {
+      method: 'DELETE',
+      headers: adminHeaders(),
+    },
+  );
+}

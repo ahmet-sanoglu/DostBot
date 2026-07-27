@@ -1,5 +1,8 @@
-// Mühendis panelindeki küçük canlı harita — robot konumu, konum işaretleri ve geofence çizimi.
-// Çizim modunda tıklama ile poligon köşesi eklenir; MapView'dan daha basit, sabit boyutlu önizleme.
+// Mühendis panelindeki küçük canlı harita — robot, konumlar, geofence ve yasak dikdörtgen çizimi.
+// Geofence (drawMode): çoklu köşe poligon; yasak bölge (forbiddenDrawMode): tam 2 tık = 1 dikdörtgen.
+// İki mod ayrı state — aynı tıklama dinleyicisinde karışmasın, biri açılınca diğeri kapansın diye.
+// Konum tooltip: locationMarkersRef'teki canvas px; LOCATION_HIT_RADIUS_PX içindeyse gösterilir.
+// Tooltip drawMode/forbiddenDrawMode'dan bağımsız — çizim sırasında da konum adı okunabilsin.
 
 import React, { useEffect, useRef, useState } from 'react';
 import { Topic } from 'roslib';
@@ -15,6 +18,11 @@ const MINI_MAP_WIDTH = 340;
 const DRAW_MAP_WIDTH = 480;
 const POS_SMOOTH_ALPHA = 0.35;
 const YAW_SMOOTH_ALPHA = 0.25;
+/**
+ * Tooltip "yakın" eşiği (canvas px). Dünya metresi değil ekran pikseli —
+ * zoom/fitScale değişince bile fare hissi sabit kalsın diye.
+ */
+const LOCATION_HIT_RADIUS_PX = 12;
 
 /** Harita görüntüsünün piksel boyutları. */
 function getImageSize(imageObj) {
@@ -44,6 +52,20 @@ function worldToPixel(worldX, worldY, metadata, imageSize) {
   return { x: pixelX, y: pixelY };
 }
 
+/**
+ * Dünya → canvas ekran pikseli (tooltip hit-test için).
+ * drawImage ile aynı translate/scale/rotate zincirini uygular.
+ */
+function worldToCanvas(worldX, worldY, mapMeta, imageSize, layout) {
+  const pixel = worldToPixel(worldX, worldY, mapMeta, imageSize);
+  const localX = pixel.y;
+  const localY = imageSize.width - 1 - pixel.x;
+  return {
+    x: layout.centerX + localX * layout.fitScale,
+    y: layout.centerY + localY * layout.fitScale,
+  };
+}
+
 function displayLocalToImagePixel(localX, localY, imageSize) {
   return {
     x: imageSize.width - 1 - localY,
@@ -57,7 +79,7 @@ function imagePixelToWorld(pixelX, pixelY, metadata, imageSize) {
   return { x: worldX, y: worldY };
 }
 
-/** Canvas tıklamasını dünya koordinatına çevirir (geofence köşe ekleme için). */
+/** Canvas tıklamasını dünya koordinatına çevirir (geofence / yasak bölge köşe için). */
 function canvasToWorld(canvasX, canvasY, mapMeta, imageObj, canvasWidth, canvasHeight) {
   const imageSize = getImageSize(imageObj);
   const { fitScale, centerX, centerY, displayW, displayH } = getMapFitTransform(
@@ -159,7 +181,62 @@ function drawBoundaryPolygon(ctx, vertices, mapMeta, imageSize, scale, { closed 
   ctx.restore();
 }
 
-/** Mühendis paneli mini harita — canlı robot, konumlar ve sınır çizimi. */
+/** Yasak dikdörtgen — kırmızı; geofence yeşilinden ayırt edilsin diye. */
+function drawForbiddenRect(ctx, rect, mapMeta, imageSize, scale, { dashed = false } = {}) {
+  if (!rect) return;
+  const { xMin, xMax, yMin, yMax } = rect;
+  if (
+    typeof xMin !== 'number' || typeof xMax !== 'number'
+    || typeof yMin !== 'number' || typeof yMax !== 'number'
+  ) {
+    return;
+  }
+
+  const corners = [
+    worldToPixel(xMin, yMin, mapMeta, imageSize),
+    worldToPixel(xMax, yMin, mapMeta, imageSize),
+    worldToPixel(xMax, yMax, mapMeta, imageSize),
+    worldToPixel(xMin, yMax, mapMeta, imageSize),
+  ];
+
+  ctx.save();
+  ctx.setLineDash(dashed ? [6 / scale, 4 / scale] : []);
+  ctx.strokeStyle = '#dc2626';
+  ctx.fillStyle = 'rgba(220, 38, 38, 0.22)';
+  ctx.lineWidth = 2 / scale;
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  corners.forEach((corner, index) => {
+    if (index === 0) ctx.moveTo(corner.x, corner.y);
+    else ctx.lineTo(corner.x, corner.y);
+  });
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** İki dünya köşesinden axis-aligned dikdörtgen — poligon vertex listesi gerekmez. */
+function rectFromCorners(a, b) {
+  return {
+    xMin: Math.min(a.x, b.x),
+    xMax: Math.max(a.x, b.x),
+    yMin: Math.min(a.y, b.y),
+    yMax: Math.max(a.y, b.y),
+  };
+}
+
+function getCanvasPoint(event, canvas) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  return {
+    x: (event.clientX - rect.left) * scaleX,
+    y: (event.clientY - rect.top) * scaleY,
+  };
+}
+
+/** Mühendis paneli mini harita — canlı robot, konumlar, sınır ve yasak bölge çizimi. */
 export default function EngineerMiniMap({
   locations = [],
   boundaryPolygon = null,
@@ -168,9 +245,16 @@ export default function EngineerMiniMap({
   drawMode = false,
   onVertexAdd,
   onDrawFinish,
+  forbiddenZones = [],
+  forbiddenDrawMode = false,
+  forbiddenCorner = null,
+  forbiddenDraftRect = null,
+  onForbiddenCornerClick,
 }) {
   const canvasRef = useRef(null);
   const layoutRef = useRef(null);
+  /** Son çizimde üretilen canvas konumları — hit-test dünya→piksel dönüşümünü tekrarlamasın. */
+  const locationMarkersRef = useRef([]);
   const smoothedPoseRef = useRef(null);
   const { ros } = useRos();
   const { setPose: setTelemetryPose } = useTelemetry();
@@ -179,8 +263,11 @@ export default function EngineerMiniMap({
   const [robotPose, setRobotPose] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [mapHeight, setMapHeight] = useState(Math.round(MINI_MAP_WIDTH * 0.75));
+  const [previewCorner, setPreviewCorner] = useState(null);
+  const [tooltip, setTooltip] = useState(null);
 
-  const mapWidth = drawMode ? DRAW_MAP_WIDTH : MINI_MAP_WIDTH;
+  const anyDrawMode = drawMode || forbiddenDrawMode;
+  const mapWidth = anyDrawMode ? DRAW_MAP_WIDTH : MINI_MAP_WIDTH;
 
   useEffect(() => {
     fetch(MAP_METADATA_URL)
@@ -232,6 +319,13 @@ export default function EngineerMiniMap({
     return () => odomTopic.unsubscribe();
   }, [ros, setTelemetryPose]);
 
+  // Çizim bitince önizleme kalmasın
+  useEffect(() => {
+    if (!forbiddenDrawMode || !forbiddenCorner) {
+      setPreviewCorner(null);
+    }
+  }, [forbiddenDrawMode, forbiddenCorner]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !imageObj || !mapMeta) return;
@@ -272,10 +366,46 @@ export default function EngineerMiniMap({
       );
     }
 
+    (Array.isArray(forbiddenZones) ? forbiddenZones : []).forEach((zone) => {
+      drawForbiddenRect(ctx, zone, mapMeta, imageSize, fitScale);
+    });
+
+    if (forbiddenDraftRect) {
+      drawForbiddenRect(ctx, forbiddenDraftRect, mapMeta, imageSize, fitScale);
+    }
+
+    // İlk köşe + fare: önizleme dikdörtgeni (ikinci tıklama öncesi)
+    if (forbiddenCorner && previewCorner) {
+      drawForbiddenRect(
+        ctx,
+        rectFromCorners(forbiddenCorner, previewCorner),
+        mapMeta,
+        imageSize,
+        fitScale,
+        { dashed: true },
+      );
+    } else if (forbiddenCorner) {
+      const pixel = worldToPixel(forbiddenCorner.x, forbiddenCorner.y, mapMeta, imageSize);
+      ctx.beginPath();
+      ctx.fillStyle = '#dc2626';
+      ctx.arc(pixel.x, pixel.y, 4 / fitScale, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+
+    const markers = [];
     locations.forEach((location) => {
       if (typeof location.x !== 'number' || typeof location.y !== 'number') return;
       const pixel = worldToPixel(location.x, location.y, mapMeta, imageSize);
       const markerRadius = Math.max(3, 5 / fitScale);
+      const canvasPoint = worldToCanvas(location.x, location.y, mapMeta, imageSize, layout);
+
+      markers.push({
+        canvasX: canvasPoint.x,
+        canvasY: canvasPoint.y,
+        name: location.name || 'Konum',
+        worldX: location.x,
+        worldY: location.y,
+      });
 
       ctx.beginPath();
       ctx.fillStyle = '#025539';
@@ -285,6 +415,7 @@ export default function EngineerMiniMap({
       ctx.fill();
       ctx.stroke();
     });
+    locationMarkersRef.current = markers;
 
     if (robotPose) {
       const pixel = worldToPixel(robotPose.x, robotPose.y, mapMeta, imageSize);
@@ -303,22 +434,29 @@ export default function EngineerMiniMap({
     boundaryPolygon,
     draftVertices,
     draftClosed,
+    forbiddenZones,
+    forbiddenCorner,
+    forbiddenDraftRect,
+    previewCorner,
   ]);
 
   const handleCanvasClick = (event) => {
-    if (!drawMode || !onVertexAdd || !mapMeta || !imageObj) return;
+    if (!mapMeta || !imageObj) return;
 
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const canvasX = (event.clientX - rect.left) * scaleX;
-    const canvasY = (event.clientY - rect.top) * scaleY;
+    const point = getCanvasPoint(event, canvas);
+    const world = canvasToWorld(point.x, point.y, mapMeta, imageObj, canvas.width, canvas.height);
+    if (!world) return;
 
-    const world = canvasToWorld(canvasX, canvasY, mapMeta, imageObj, canvas.width, canvas.height);
-    if (world) {
+    // Poligon: her tık +vertex; dikdörtgen: parent 1. köşe / 2. köşe ile bitirir (çoklu köşe yok)
+    if (forbiddenDrawMode && onForbiddenCornerClick) {
+      onForbiddenCornerClick(world);
+      return;
+    }
+
+    if (drawMode && onVertexAdd) {
       onVertexAdd(world);
     }
   };
@@ -329,16 +467,78 @@ export default function EngineerMiniMap({
     onDrawFinish();
   };
 
+  const handleMouseMove = (event) => {
+    const canvas = canvasRef.current;
+    if (!canvas || !mapMeta || !imageObj) return;
+
+    const point = getCanvasPoint(event, canvas);
+
+    // 1. köşe seçiliyken fareyle karşı köşe önizlemesi (2. tık kesinleştirir)
+    if (forbiddenDrawMode && forbiddenCorner) {
+      const world = canvasToWorld(point.x, point.y, mapMeta, imageObj, canvas.width, canvas.height);
+      setPreviewCorner(world);
+    }
+
+    // Tooltip: drawMode kapalı/açık fark etmez — eşik LOCATION_HIT_RADIUS_PX (canvas)
+    const markers = locationMarkersRef.current;
+    let nearest = null;
+    let nearestDist = LOCATION_HIT_RADIUS_PX;
+    markers.forEach((marker) => {
+      const dx = point.x - marker.canvasX;
+      const dy = point.y - marker.canvasY;
+      const dist = Math.hypot(dx, dy);
+      if (dist <= nearestDist) {
+        nearestDist = dist;
+        nearest = marker;
+      }
+    });
+
+    if (nearest) {
+      setTooltip({
+        x: nearest.canvasX,
+        y: nearest.canvasY,
+        name: nearest.name,
+        worldX: nearest.worldX,
+        worldY: nearest.worldY,
+      });
+    } else {
+      setTooltip(null);
+    }
+  };
+
+  const handleMouseLeave = () => {
+    setPreviewCorner(null);
+    setTooltip(null);
+  };
+
+  let hintText = null;
+  if (drawMode) {
+    hintText = 'Haritaya tıklayarak köşe ekleyin';
+  } else if (forbiddenDrawMode) {
+    hintText = forbiddenCorner
+      ? 'Karşı köşeyi seçin'
+      : 'Dikdörtgenin ilk köşesine tıklayın';
+  }
+
   return (
     <div
-      className={`engineer-mini-map${drawMode ? ' engineer-mini-map--draw' : ''}`}
+      className={`engineer-mini-map${anyDrawMode ? ' engineer-mini-map--draw' : ''}`}
       style={{ width: mapWidth, height: mapHeight }}
     >
       {loadError && (
         <p className="engineer-mini-map__error">{loadError}</p>
       )}
-      {drawMode && (
-        <p className="engineer-mini-map__hint">Haritaya tıklayarak köşe ekleyin</p>
+      {hintText && (
+        <p className="engineer-mini-map__hint">{hintText}</p>
+      )}
+      {tooltip && (
+        <div
+          className="engineer-mini-map__tooltip"
+          style={{ left: tooltip.x, top: tooltip.y }}
+        >
+          <strong>{tooltip.name}</strong>
+          X {tooltip.worldX.toFixed(2)} m · Y {tooltip.worldY.toFixed(2)} m
+        </div>
       )}
       <canvas
         ref={canvasRef}
@@ -347,6 +547,8 @@ export default function EngineerMiniMap({
         height={mapHeight}
         onClick={handleCanvasClick}
         onDoubleClick={handleDoubleClick}
+        onMouseMove={handleMouseMove}
+        onMouseLeave={handleMouseLeave}
       />
     </div>
   );

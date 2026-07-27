@@ -681,6 +681,80 @@ def get_map_forbidden_zones(map_id):
     return jsonify(data)
 
 
+def _normalize_forbidden_zone(raw):
+    """
+    Yasak dikdörtgen doğrular: name + xMin<xMax, yMin<yMax (hepsi sayı).
+    Geofence poligonundan farklı — birden fazla dikdörtgen tutulabilir; id yoksa üretilir.
+    """
+    if not isinstance(raw, dict):
+        return None
+    name = raw.get("name")
+    x_min, x_max = raw.get("xMin"), raw.get("xMax")
+    y_min, y_max = raw.get("yMin"), raw.get("yMax")
+    if not isinstance(name, str) or not name.strip():
+        return None
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (x_min, x_max, y_min, y_max)):
+        return None
+    if not (x_min < x_max and y_min < y_max):
+        return None
+    return {
+        "id": raw.get("id") or f"zone_{uuid.uuid4().hex[:8]}",
+        "name": name.strip(),
+        "xMin": float(x_min),
+        "xMax": float(x_max),
+        "yMin": float(y_min),
+        "yMax": float(y_max),
+    }
+
+
+# POST /api/maps/<map_id>/forbidden-zones — PIN korumalı. Yalnızca mühendis paneli.
+# Yeni dikdörtgen yasak bölge ekler; operatör hedef kontrolünde isPointInForbiddenZone ile kullanılır.
+@app.route('/api/maps/<map_id>/forbidden-zones', methods=['POST'])
+def add_map_forbidden_zone(map_id):
+    auth_error = _require_admin()
+    if auth_error:
+        return auth_error
+
+    payload = request.get_json(silent=True)
+    zone = _normalize_forbidden_zone(payload)
+    if zone is None:
+        return jsonify({"error": "Expected {name, xMin, xMax, yMin, yMax} with xMin<xMax and yMin<yMax"}), 400
+
+    data, error = _read_map_data_file(map_id, "forbidden_zones.json")
+    if error:
+        return error
+
+    if any(item.get("id") == zone["id"] for item in data):
+        zone["id"] = f"zone_{uuid.uuid4().hex[:8]}"
+
+    data.append(zone)
+    _write_json_file(_map_data_file(map_id, "forbidden_zones.json"), data)
+    return jsonify(zone), 201
+
+
+# DELETE /api/maps/<map_id>/forbidden-zones/<zone_id> — PIN korumalı. Yalnızca mühendis paneli.
+# Tek bir yasak dikdörtgeni listeden çıkarır (geofence gibi tek dosya silinmez; çoklu bölge).
+@app.route('/api/maps/<map_id>/forbidden-zones/<zone_id>', methods=['DELETE'])
+def delete_map_forbidden_zone(map_id, zone_id):
+    auth_error = _require_admin()
+    if auth_error:
+        return auth_error
+
+    if not _validate_map_id(map_id):
+        return jsonify({"error": "Invalid map id"}), 400
+
+    data, error = _read_map_data_file(map_id, "forbidden_zones.json")
+    if error:
+        return error
+
+    next_data = [item for item in data if item.get("id") != zone_id]
+    if len(next_data) == len(data):
+        return jsonify({"error": "Forbidden zone not found"}), 404
+
+    _write_json_file(_map_data_file(map_id, "forbidden_zones.json"), next_data)
+    return jsonify({"ok": True})
+
+
 if __name__ == '__main__':
     # Geliştirme ortamında doğrudan çalıştırma: python app.py
     app.run(host='0.0.0.0', port=5000, debug=True)
