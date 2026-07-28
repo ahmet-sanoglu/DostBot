@@ -5,12 +5,13 @@ Dost Tarim Teknolojileri bunyesinde gelistirilen, serada calisan otonom/manuel k
 ## Mimari
 
 Robot / ROS 2 -> rosbridge (WebSocket :9090) -> React Frontend -> MapView / Joystick / Gorevler
+                 -> nav_relay.py (NavigateToPose ActionClient) <-> /agrifleet/nav_*
 Flask Backend :5000 -> harita gorseli + metadata + konum/gorev/harita verisi (JSON)
 
 Teknoloji yigini:
 - Frontend: React + Vite, react-router-dom, roslibjs, nipplejs, recharts
 - Backend: Flask, flask-cors, Pillow
-- ROS 2 Jazzy, rosbridge_suite, Nav2 (navigate_to_pose action)
+- ROS 2 Jazzy, rosbridge_suite, Nav2 (navigate_to_pose); UI action yerine nav_relay topic'leri kullanir
 
 ## Klasor Yapisi
 
@@ -25,6 +26,7 @@ Teknoloji yigini:
 - frontend/src/components/engineer/ (Muhendis paneli bilesenleri)
 - agriculture_map1/ (statik harita dosyalari)
 - extract_bag_map.py (bag'den canli harita cikarma scripti)
+- ros_nodes/nav_relay.py (Nav2 ActionClient role; UI <-> /agrifleet/nav_command|nav_status)
 
 ## Iki Panel
 
@@ -59,6 +61,13 @@ Bundan sonra elle yapman gerekenler:
 Backend: cd backend, source ../venv/bin/activate, python3 app.py
 Frontend: cd frontend, npm run dev
 ROS koprusu: ros2 launch rosbridge_server rosbridge_websocket_launch.xml
+
+Nav role (rosbridge yaninda zorunlu — action feedback/result UI'ya topic ile gelir):
+
+```bash
+source /opt/ros/jazzy/setup.bash
+python3 ros_nodes/nav_relay.py
+```
 
 ## Acik Isler
 

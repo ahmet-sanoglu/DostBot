@@ -38,15 +38,15 @@
     "name": "zincir testi",
     "steps": [
       {
-        "x": 1.0,
-        "y": 0.0,
+        "x": 0.1,
+        "y": 0.3,
         "yaw": 0.0,
         "action": {
           "type": "wait"
         }
       },
       {
-        "x": 2.0,
+        "x": 1.5,
         "y": 0.0,
         "yaw": 0.0,
         "action": {
@@ -92,5 +92,35 @@
       }
     ],
     "description": "SIrasiyla a ve b ahirlarinin topragini surme"
+  },
+  {
+    "id": "task_8877148d",
+    "name": "Anlik test",
+    "locationId": "loc_bb768ef1",
+    "steps": [
+      {
+        "x": -0.5,
+        "y": 1.0,
+        "yaw": 0.0,
+        "action": {
+          "type": "wait"
+        }
+      }
+    ]
+  },
+  {
+    "id": "task_c9b9572a",
+    "name": "acil dur testi2",
+    "locationId": "loc_80545279",
+    "steps": [
+      {
+        "x": -0.3,
+        "y": 1.0,
+        "yaw": 0.0,
+        "action": {
+          "type": "wait"
+        }
+      }
+    ]
   }
 ]

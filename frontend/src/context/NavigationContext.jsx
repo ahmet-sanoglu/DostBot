@@ -1,6 +1,6 @@
 // Operatör panelindeki navigasyon akışını yönetir: hedef gönderme, görev kuyruğu, durum metni.
-// Nav2'ye tek seferde bir hedef gider; her adıma varınca o step'in action'ı çalışır, sonra sıradaki adım gider.
-// Acil Dur, görev iptali ve "Son Olaylar" panelindeki mesajlar da buradan yönetilir.
+// Hedefler nav_relay.py üzerinden Nav2'ye gider; durum /agrifleet/nav_status JSON ile gelir.
+// Nav2'ye tek seferde bir hedef; her adıma varınca step action, sonra sıradaki adım.
 
 import React, {
   createContext,
@@ -19,7 +19,16 @@ import {
 } from '../utils/rosNavigation';
 import { startCoverageTask } from '../utils/coverageAction';
 
+/** accepted hiç gelmezse (röle yok / bag) kısa kaçış; UI sonsuza kadar meşgul kalmasın diye. */
+const NAV_BUSY_MS = 10000;
+/** accepted geldiyse röle çalışıyor demektir; bundan sonra yalnızca gerçek takılma için son çare. */
+const NAV_ACCEPTED_SAFETY_MS = 120000;
 const MAX_EVENTS = 10;
+
+/** action_msgs/GoalStatus — röle result.status alanıyla aynı. */
+const NAV_RESULT_SUCCEEDED = 4;
+const NAV_RESULT_CANCELED = 5;
+const NAV_RESULT_ABORTED = 6;
 
 const NavigationContext = createContext(null);
 
@@ -33,7 +42,14 @@ function formatEventTime(date = new Date()) {
 }
 
 /** Durum kartında gösterilecek metni bağlantı, acil dur, coverage ve görev ilerlemesine göre üretir. */
-export function getStatusText({ isConnected, emergencyStopped, coverageStatus, queueBusy, activeTaskProgress }) {
+export function getStatusText({
+  isConnected,
+  emergencyStopped,
+  coverageStatus,
+  queueBusy,
+  activeTaskProgress,
+  navDistanceRemaining,
+}) {
   if (!isConnected) {
     return '⚠️ Bağlantı Yok';
   }
@@ -46,12 +62,17 @@ export function getStatusText({ isConnected, emergencyStopped, coverageStatus, q
   if (queueBusy && activeTaskProgress) {
     const base = `🎯 ${activeTaskProgress.taskName} - Adım ${activeTaskProgress.currentStep}/${activeTaskProgress.totalSteps}`;
     if (activeTaskProgress.stepActionLabel) {
-      // Büyük durum metninde de eylem görünsün (till sırasında operatör bağlam kaybetmesin)
       return `${base} — ${activeTaskProgress.stepActionLabel}`;
+    }
+    if (navDistanceRemaining != null) {
+      return `${base} — kalan: ${Number(navDistanceRemaining).toFixed(1)} m`;
     }
     return base;
   }
   if (queueBusy) {
+    if (navDistanceRemaining != null) {
+      return `🎯 Hedefe gidiyor — kalan: ${Number(navDistanceRemaining).toFixed(1)} m`;
+    }
     return '🎯 Hedefe gidiyor';
   }
   return '✅ Hazır';
@@ -89,13 +110,15 @@ export function NavigationProvider({ children }) {
   const [activeTaskProgress, setActiveTaskProgress] = useState(null);
   const [emergencyStopped, setEmergencyStopped] = useState(false);
   const [coverageStatus, setCoverageStatus] = useState(null);
+  const [navDistanceRemaining, setNavDistanceRemaining] = useState(null);
 
   const estopResetTimerRef = useRef(null);
+  const busyTimerRef = useRef(null);  // NAV_BUSY_MS yedek; result/rejected gelince clearTimeout
   const wasBusyRef = useRef(false);
   const estopTriggeredRef = useRef(false);
   const skipNextIdleEventRef = useRef(false);
   const inStepActionRef = useRef(false);  // till gibi uzun eylem sürerken nav-tamamlandı effect'ini yutar
-  const queueBusyRef = useRef(false);  // status callback'te güncel meşguliyet (stale closure önlemi)
+  const queueBusyRef = useRef(false);
   const wasConnectedRef = useRef(status === ROS_CONNECTED_STATUS);
   const connectionInitializedRef = useRef(false);
   const pendingStepsRef = useRef([]);
@@ -105,6 +128,24 @@ export function NavigationProvider({ children }) {
   const isConnected = status === ROS_CONNECTED_STATUS;
 
   queueBusyRef.current = queueBusy;
+
+  const clearBusyTimer = useCallback(() => {
+    if (busyTimerRef.current) {
+      window.clearTimeout(busyTimerRef.current);
+      busyTimerRef.current = null;
+    }
+  }, []);
+
+  const startBusyTimer = useCallback((timeoutMs) => {
+    // Tek timer ref tutulur; kısa fallback ile uzun safety ağı birbirinin yerine geçer.
+    clearBusyTimer();
+    busyTimerRef.current = window.setTimeout(() => {
+      busyTimerRef.current = null;
+      if (inStepActionRef.current) return;
+      setNavDistanceRemaining(null);
+      setQueueBusy(false);
+    }, timeoutMs);
+  }, [clearBusyTimer]);
 
   const addEvent = useCallback((message) => {
     const entry = {
@@ -121,11 +162,14 @@ export function NavigationProvider({ children }) {
 
     clearPlanPath();
     setLastSentGoal({ ...goal, source: sourceLabel });
-    // Meşguliyet /navigate_to_pose/_action/status terminal durumuna (4/5/6) kadar sürer
+    setNavDistanceRemaining(null);
+    // Katman 1: kısa fallback. Röle hiç çalışmıyorsa / accepted gelmiyorsa bag testinde çıkış yolu bu.
+    // accepted gelirse bu 10 sn timer uzun güvenlik ağıyla değiştirilecek.
     setQueueBusy(true);
+    startBusyTimer(NAV_BUSY_MS);
 
     return true;
-  }, [clearPlanPath, ros]);
+  }, [clearPlanPath, ros, startBusyTimer]);
 
   const sendNavigationGoal = useCallback((goal, sourceLabel) => {
     if (queueBusy || pendingStepsRef.current.length > 0 || activeTaskRef.current) {
@@ -139,7 +183,7 @@ export function NavigationProvider({ children }) {
 
     const sent = dispatchGoal(goal, sourceLabel);
     if (sent) {
-      addEvent(sourceLabel || 'Hedefe gidiliyor');
+      addEvent(sourceLabel || 'Hedefe gidiyor');
     }
     return sent;
   }, [addEvent, dispatchGoal, queueBusy]);
@@ -147,10 +191,12 @@ export function NavigationProvider({ children }) {
   const emergencyStopNavigation = useCallback(() => {
     cancelActiveNavigationGoal(ros);
 
+    clearBusyTimer();
     pendingStepsRef.current = [];
     activeTaskRef.current = null;
     setActiveTaskProgress(null);
     setCoverageStatus(null);
+    setNavDistanceRemaining(null);
     skipNextIdleEventRef.current = false;
     inStepActionRef.current = false;
     clearPlanPath();
@@ -167,7 +213,7 @@ export function NavigationProvider({ children }) {
       setEmergencyStopped(false);
       estopResetTimerRef.current = null;
     }, 4000);
-  }, [clearPlanPath, ros]);
+  }, [clearBusyTimer, clearPlanPath, ros]);
 
   /** Step eylemi bittikten sonra kuyruktaki bir sonraki navigasyon hedefini gönderir veya görevi kapatır. */
   const proceedAfterStepAction = useCallback(() => {
@@ -205,8 +251,7 @@ export function NavigationProvider({ children }) {
 
   /**
    * Ulaşılan step'in action.type değerini çalıştırır — sıradaki step'in değil.
-   * till: onResult gelene kadar bekler, sonra proceed; goto_*: şimdilik uyarı + hemen proceed
-   * (ileride till gibi ROS bitene kadar bekleyecek).
+   * till: onResult gelene kadar bekler, sonra proceed; goto_*: şimdilik uyarı + hemen proceed.
    */
   const runStepAction = useCallback((actionType, stepNumber, taskName) => {
     const proceed = () => proceedAfterStepActionRef.current?.();
@@ -248,7 +293,6 @@ export function NavigationProvider({ children }) {
     }
 
     if (actionType === 'goto_charge') {
-      // İleride till gibi ROS action bitene kadar bekleyip proceed çağrılacak
       console.warn('[stepAction] goto_charge henüz bağlanmadı — mühendisten action/servis bilgisi bekleniyor');
       addEvent(`Adım ${stepNumber}: Şarj İstasyonuna Git henüz aktif değil (${taskName})`);
       proceed();
@@ -256,7 +300,6 @@ export function NavigationProvider({ children }) {
     }
 
     if (actionType === 'goto_base') {
-      // İleride till gibi base koordinatına gidilip bitene kadar bekleyip proceed çağrılacak
       console.warn('[stepAction] goto_base henüz bağlanmadı — base konumu koordinatı bekleniyor');
       addEvent(`Adım ${stepNumber}: Base Konuma Git henüz aktif değil (${taskName})`);
       proceed();
@@ -266,7 +309,7 @@ export function NavigationProvider({ children }) {
     proceed();
   }, [addEvent, ros]);
 
-  /** Nav2 hedefi tamamlandı (status topic) — az önce varılan noktanın eylemini tetikler. */
+  /** Nav hedefi tamamlandı (röle result) — az önce varılan noktanın eylemini tetikler. */
   const handleNavigationArrived = useCallback(() => {
     const activeTask = activeTaskRef.current;
     if (!activeTask) {
@@ -317,19 +360,62 @@ export function NavigationProvider({ children }) {
     return sent;
   }, [addEvent, dispatchGoal, queueBusy]);
 
-  // Nav2 /_action/status: tek aktif görev (queueBusy) varken terminal (4/5/6) → meşguliyeti kapat
+  // /agrifleet/nav_status — tek güvenilir kaynak (nav_relay); status_list / ID tahmini yok
   useEffect(() => {
     if (!ros || !isConnected) return undefined;
 
-    return subscribeNavigationStatus(ros, ({ terminal }) => {
-      if (!terminal) return;
-      // till sırasında queueBusy true kalır; eski SUCCEEDED navigasyonu bitmiş saymasın
-      if (inStepActionRef.current) return;
-      if (!queueBusyRef.current) return;
+    return subscribeNavigationStatus(ros, (message) => {
+      if (!message || typeof message.type !== 'string') return;
 
-      setQueueBusy(false);
+      if (message.type === 'accepted') {
+        console.log('[navStatus] accepted');
+        // Katman 2: accepted, nav_relay'in gerçekten canlı olduğunu kanıtlar. Bu noktadan sonra
+        // 10 sn fallback erken "Hazır" üretmemeli; onun yerine yalnızca robot tamamen takılırsa
+        // devreye girecek 120 sn uzun güvenlik ağına geçilir.
+        startBusyTimer(NAV_ACCEPTED_SAFETY_MS);
+        return;
+      }
+
+      if (message.type === 'feedback') {
+        if (typeof message.distance_remaining === 'number') {
+          setNavDistanceRemaining(message.distance_remaining);
+        }
+        return;
+      }
+
+      if (message.type === 'rejected') {
+        console.warn('[navStatus] rejected');
+        clearBusyTimer();
+        setNavDistanceRemaining(null);
+        pendingStepsRef.current = [];
+        activeTaskRef.current = null;
+        setActiveTaskProgress(null);
+        skipNextIdleEventRef.current = true;
+        addEvent('Hedef reddedildi');
+        setQueueBusy(false);
+        return;
+      }
+
+      if (message.type === 'result') {
+        if (inStepActionRef.current) return;
+        if (!queueBusyRef.current) return;
+
+        const resultStatus = message.status;
+        console.log('[navStatus] result status:', resultStatus);
+        clearBusyTimer();
+        setNavDistanceRemaining(null);
+
+        // 4=SUCCEEDED, 5=CANCELED, 6=ABORTED — hepsi meşguliyeti kapatır; zincir effect'e bırakılır
+        if (
+          resultStatus === NAV_RESULT_SUCCEEDED
+          || resultStatus === NAV_RESULT_CANCELED
+          || resultStatus === NAV_RESULT_ABORTED
+        ) {
+          setQueueBusy(false);
+        }
+      }
     });
-  }, [isConnected, ros]);
+  }, [addEvent, clearBusyTimer, isConnected, ros, startBusyTimer]);
 
   // queueBusy false: navigasyon bitti → ulaşılan step'in eylemi → eylem bitince sıradaki step veya görev sonu
   useEffect(() => {
@@ -381,14 +467,22 @@ export function NavigationProvider({ children }) {
   }, [addEvent, isConnected]);
 
   useEffect(() => () => {
+    clearBusyTimer();
     if (estopResetTimerRef.current) {
       window.clearTimeout(estopResetTimerRef.current);
     }
-  }, []);
+  }, [clearBusyTimer]);
 
   const statusText = useMemo(
-    () => getStatusText({ isConnected, emergencyStopped, coverageStatus, queueBusy, activeTaskProgress }),
-    [isConnected, emergencyStopped, coverageStatus, queueBusy, activeTaskProgress],
+    () => getStatusText({
+      isConnected,
+      emergencyStopped,
+      coverageStatus,
+      queueBusy,
+      activeTaskProgress,
+      navDistanceRemaining,
+    }),
+    [isConnected, emergencyStopped, coverageStatus, queueBusy, activeTaskProgress, navDistanceRemaining],
   );
 
   const value = useMemo(
