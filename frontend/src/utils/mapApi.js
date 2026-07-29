@@ -17,6 +17,11 @@ export async function fetchActiveMap() {
   return fetchJson(`${API_BASE}/api/maps/active`);
 }
 
+/** Tüm harita kayıtlarını listeler (aktif + pasif) — mühendis paneli seçici için. */
+export async function fetchMaps() {
+  return fetchJson(`${API_BASE}/api/maps`);
+}
+
 /** Haritaya kayıtlı konum noktalarını listeler. */
 export async function fetchMapLocations(mapId) {
   return fetchJson(`${API_BASE}/api/maps/${encodeURIComponent(mapId)}/locations`);

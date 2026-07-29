@@ -62,6 +62,7 @@ export function isOccupancyPixelPassable(imageData, pixelX, pixelY, imageWidth, 
 /**
  * Dünya koordinatında hedefin üç katmanlı geçilebilirlik kontrolü.
  * 1) Harita pikseli engel mi?  2) Geofence dışında mı?  3) Yasak dikdörtgende mi?
+ * Erken return: ucuz piksel kontrolü önce; poligon/yasak sadece piksel geçtiyse.
  */
 export function isWorldGoalPassable(
   worldX,

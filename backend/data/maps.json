@@ -2,7 +2,15 @@
   {
     "id": "map_default",
     "name": "Sera A - İlk Harita",
+    "imageDir": "/home/ahmet/AgriFleet/agriculture_map1",
     "createdAt": "2026-07-14T00:00:00Z",
-    "isActive": true
+    "isActive": false
+  },
+  {
+    "id": "map_5da50895",
+    "name": "TurtleBot3 Simülasyon v3",
+    "imageDir": "/home/ahmet/AgriFleet/turtlebot3_sim_map_v3",
+    "isActive": true,
+    "createdAt": "2026-07-29T10:40:54Z"
   }
 ]

@@ -5,11 +5,19 @@
 import json
 import os
 import re
+import secrets
+import shutil
 import uuid
+from datetime import datetime, timezone
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 import yaml
 from dotenv import load_dotenv
+
+from convert_map import convert_pgm_to_png
+
+# Ana sera haritası — silinemez; yanlışlıkla silinirse operatör/mühendis paneli veri kaybeder.
+PROTECTED_MAP_ID = "map_default"
 
 # .env dosyasındaki ADMIN_PIN gibi gizli ayarları belleğe yükler.
 load_dotenv()
@@ -80,6 +88,54 @@ def _find_map(map_id):
         if entry.get("id") == map_id:
             return entry
     return None
+
+
+def _get_active_map_entry():
+    """maps.json içinde isActive: true olan ilk harita kaydını döner."""
+    for entry in _load_maps():
+        if entry.get("isActive") is True:
+            return entry
+    return None
+
+
+def _active_image_dir():
+    """
+    Aktif haritanın imageDir yolunu döner.
+    Kayıtta imageDir yoksa MAP_DIRECTORY ortam değişkenine düşer (eski kurulumlar).
+    """
+    active = _get_active_map_entry()
+    if active:
+        image_dir = active.get("imageDir")
+        if isinstance(image_dir, str) and image_dir.strip():
+            return os.path.expanduser(image_dir.strip())
+    return MAP_DIR
+
+
+def _find_map_yaml(image_dir):
+    """
+    Harita YAML dosyasını bulur.
+    map_from_bag.yaml önce denenir: mevcut map_default (agriculture_map1) davranışı bozulmasın diye.
+    Yeni haritalarda yalnızca map.yaml vardır.
+    """
+    for name in ("map_from_bag.yaml", "map.yaml"):
+        path = os.path.join(image_dir, name)
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def _find_map_png(image_dir):
+    """PNG görüntüsünü bulur; map_from_bag.png öncelikli (geriye dönük uyumluluk)."""
+    for name in ("map_from_bag.png", "map.png"):
+        path = os.path.join(image_dir, name)
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def _save_maps(maps):
+    """maps.json kaydını diske yazar."""
+    _write_json_file(MAPS_FILE, maps)
 
 
 def _read_map_data_file(map_id, filename):
@@ -365,11 +421,12 @@ def _normalize_boundary_points(raw):
 
 
 # GET /api/map/metadata — Herkese açık. Operatör + mühendis paneli.
-# Haritanın çözünürlüğü (metre/piksel) ve orijin noktası; frontend dünya↔piksel dönüşümünde kullanır.
+# Aktif haritanın imageDir'indeki YAML'dan resolution/origin okunur.
 @app.route('/api/map/metadata', methods=['GET'])
 def get_map_metadata():
-    yaml_path = os.path.join(MAP_DIR, "map_from_bag.yaml")
-    if not os.path.exists(yaml_path):
+    image_dir = _active_image_dir()
+    yaml_path = _find_map_yaml(image_dir)
+    if not yaml_path:
         return jsonify({"error": "Map metadata not found"}), 404
 
     try:
@@ -385,13 +442,15 @@ def get_map_metadata():
 
 
 # GET /api/map/image — Herkese açık. Operatör + mühendis paneli.
-# ROS occupancy grid'den üretilmiş PNG harita görüntüsünü doğrudan tarayıcıya gönderir.
+# Aktif haritanın imageDir'indeki PNG'yi tarayıcıya gönderir.
 @app.route('/api/map/image', methods=['GET'])
 def get_map_image():
-    if not os.path.exists(os.path.join(MAP_DIR, "map_from_bag.png")):
+    image_dir = _active_image_dir()
+    png_path = _find_map_png(image_dir)
+    if not png_path:
         return jsonify({"error": "Map image (PNG) not found. Run conversion script first."}), 404
 
-    return send_from_directory(MAP_DIR, "map_from_bag.png")
+    return send_from_directory(image_dir, os.path.basename(png_path))
 
 
 # POST /api/admin/verify-pin — Herkese açık (PIN bilmeden çağrılabilir, ama doğru PIN gerekir).
@@ -408,15 +467,153 @@ def verify_admin_pin():
     return jsonify({"valid": False, "error": "Invalid PIN"}), 401
 
 
+# GET /api/maps — Herkese açık. Mühendis paneli harita seçici listesi.
+# Tüm harita kayıtlarını döner (aktif + pasif).
+@app.route('/api/maps', methods=['GET'])
+def list_maps():
+    return jsonify(_load_maps())
+
+
+# POST /api/maps — PIN korumalı. Yeni sera/simülasyon haritası kaydı.
+# Neden: tek sabit MAP_DIRECTORY yetmez; her haritanın kendi imageDir + data/<id>/ klasörü olmalı.
+# Otomatik aktive edilmez — mühendis bilerek switch etsin, operatör aniden boş haritaya düşmesin.
+@app.route('/api/maps', methods=['POST'])
+def create_map():
+    denied = _require_admin()
+    if denied:
+        return denied
+
+    payload = request.get_json(silent=True) or {}
+    name = payload.get("name")
+    source_dir = payload.get("sourceDir")
+
+    if not isinstance(name, str) or not name.strip():
+        return jsonify({"error": "name is required"}), 400
+    if not isinstance(source_dir, str) or not source_dir.strip():
+        return jsonify({"error": "sourceDir is required"}), 400
+
+    source_dir = os.path.expanduser(source_dir.strip())
+    if not os.path.isdir(source_dir):
+        return jsonify({"error": "sourceDir does not exist or is not a directory"}), 400
+
+    yaml_path = os.path.join(source_dir, "map.yaml")
+    pgm_path = os.path.join(source_dir, "map.pgm")
+    png_path = os.path.join(source_dir, "map.png")
+
+    if not os.path.isfile(yaml_path):
+        return jsonify({"error": "map.yaml not found in sourceDir"}), 400
+    if not os.path.isfile(pgm_path) and not os.path.isfile(png_path):
+        return jsonify({"error": "map.pgm or map.png required in sourceDir"}), 400
+
+    # PNG yoksa PGM'den üret — tarayıcı PNG ister; sabit agriculture_map1 yolu yok (çoklu harita).
+    if not os.path.isfile(png_path):
+        try:
+            convert_pgm_to_png(pgm_path, png_path)
+        except Exception as e:
+            return jsonify({"error": f"Failed to convert PGM to PNG: {e}"}), 500
+
+    map_id = f"map_{secrets.token_hex(4)}"
+    # Çakışma çok düşük ihtimal; yine de benzersiz olduğundan emin ol.
+    while _find_map(map_id):
+        map_id = f"map_{secrets.token_hex(4)}"
+
+    data_dir = _map_data_dir(map_id)
+    try:
+        os.makedirs(data_dir, exist_ok=False)
+    except FileExistsError:
+        return jsonify({"error": "Map data directory already exists"}), 500
+
+    # Konum/görev verisi harita başına ayrı — başka haritanın kayıtları karışmasın.
+    _write_json_file(_map_data_file(map_id, "locations.json"), [])
+    _write_json_file(_map_data_file(map_id, "tasks.json"), [])
+    _write_json_file(_map_data_file(map_id, "forbidden_zones.json"), [])
+    _write_json_file(_map_data_file(map_id, "boundary.json"), None)
+
+    entry = {
+        "id": map_id,
+        "name": name.strip(),
+        "imageDir": source_dir,
+        "isActive": False,
+        "createdAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    maps = _load_maps()
+    maps.append(entry)
+    _save_maps(maps)
+
+    return jsonify(entry), 201
+
+
+# PUT /api/maps/<map_id>/activate — PIN korumalı.
+# Tek aktif harita kuralı: metadata/image + locations/tasks hep aynı kayıttan gelsin; iki aktif = karışık UI.
+@app.route('/api/maps/<map_id>/activate', methods=['PUT'])
+def activate_map(map_id):
+    denied = _require_admin()
+    if denied:
+        return denied
+
+    if not _validate_map_id(map_id):
+        return jsonify({"error": "Invalid map id"}), 400
+
+    maps = _load_maps()
+    found = False
+    for entry in maps:
+        if entry.get("id") == map_id:
+            entry["isActive"] = True
+            found = True
+        else:
+            entry["isActive"] = False
+
+    if not found:
+        return jsonify({"error": "Map not found"}), 404
+
+    _save_maps(maps)
+    return jsonify({"id": map_id, "isActive": True})
+
+
+# DELETE /api/maps/<map_id> — PIN korumalı.
+# Aktif harita silinmez: panel anında boş/404'e düşmesin. map_default silinmez: ana sera yedeği kalsın.
+# imageDir silinmez: diskteki SLAM çıktısı elle temizlenir; yanlışlıkla harita dosyası kaybolmasın.
+@app.route('/api/maps/<map_id>', methods=['DELETE'])
+def delete_map(map_id):
+    denied = _require_admin()
+    if denied:
+        return denied
+
+    if not _validate_map_id(map_id):
+        return jsonify({"error": "Invalid map id"}), 400
+
+    if map_id == PROTECTED_MAP_ID:
+        return jsonify({"error": "map_default cannot be deleted"}), 400
+
+    maps = _load_maps()
+    entry = next((m for m in maps if m.get("id") == map_id), None)
+    if not entry:
+        return jsonify({"error": "Map not found"}), 404
+
+    if entry.get("isActive") is True:
+        return jsonify({
+            "error": "Aktif haritayı silemezsiniz, önce başka bir haritayı aktive edin",
+        }), 400
+
+    remaining = [m for m in maps if m.get("id") != map_id]
+    _save_maps(remaining)
+
+    data_dir = _map_data_dir(map_id)
+    # imageDir silinmez — yalnızca konum/görev verisi klasörü kaldırılır.
+    if os.path.isdir(data_dir):
+        shutil.rmtree(data_dir)
+
+    return jsonify({"deleted": map_id})
+
+
 # GET /api/maps/active — Herkese açık. Operatör + mühendis paneli.
 # maps.json içinde isActive: true olan tek haritanın kimliğini ve adını döner.
 @app.route('/api/maps/active', methods=['GET'])
 def get_active_map():
-    active_maps = [entry for entry in _load_maps() if entry.get("isActive") is True]
-    if not active_maps:
+    active = _get_active_map_entry()
+    if not active:
         return jsonify({"error": "No active map configured"}), 404
 
-    active = active_maps[0]  # birden fazla aktif tanımlıysa ilki kullanılır
     return jsonify({
         "id": active.get("id"),
         "name": active.get("name"),

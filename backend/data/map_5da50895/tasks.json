@@ -1,0 +1,40 @@
+[
+  {
+    "id": "task_fe6d4285",
+    "name": "TEST",
+    "steps": [
+      {
+        "x": 0.0,
+        "y": 1.11,
+        "yaw": 0.0,
+        "action": {
+          "type": "wait"
+        }
+      }
+    ],
+    "description": "test"
+  },
+  {
+    "id": "task_c7db2847",
+    "name": "zincir test",
+    "steps": [
+      {
+        "x": 0.16,
+        "y": -0.29,
+        "yaw": 0.0,
+        "action": {
+          "type": "wait"
+        }
+      },
+      {
+        "x": 1.23,
+        "y": -1.47,
+        "yaw": 0.0,
+        "action": {
+          "type": "wait"
+        }
+      }
+    ],
+    "description": "2 adım"
+  }
+]

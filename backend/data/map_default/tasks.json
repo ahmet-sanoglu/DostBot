@@ -23,13 +23,16 @@
   },
   {
     "id": "task_66e3ae31",
-    "name": "Su Deposu",
+    "name": "Su beposu",
     "locationId": "loc_042429a0",
     "steps": [
       {
         "x": 9.0,
         "y": -2.5,
-        "yaw": 0.0
+        "yaw": 0.0,
+        "action": {
+          "type": "wait"
+        }
       }
     ]
   },
@@ -38,16 +41,16 @@
     "name": "zincir testi",
     "steps": [
       {
-        "x": 0.1,
-        "y": 0.3,
+        "x": 1.5,
+        "y": 0.0,
         "yaw": 0.0,
         "action": {
           "type": "wait"
         }
       },
       {
-        "x": 1.5,
-        "y": 0.0,
+        "x": -0.5,
+        "y": 1.0,
         "yaw": 0.0,
         "action": {
           "type": "wait"

@@ -1,21 +1,35 @@
-import os
+# Occupancy grid PGM → tarayıcıda kullanılabilir PNG dönüşümü.
+# Parametrik: sabit agriculture_map1 yolu kaldırıldı — her haritanın kendi sourceDir'i olabilir;
+# POST /api/maps yeni klasör eklerken PNG yoksa bu fonksiyonu çağırır.
+
 from PIL import Image
+import os
+import sys
 
-def convert_ros_map():
-    map_dir = os.path.expanduser("~/AgriFleet/agriculture_map1")
-    pgm_path = os.path.join(map_dir, "map.pgm")
-    output_png_path = os.path.join(map_dir, "map.png")
 
-    if not os.path.exists(pgm_path):
-        print(f"Hata: {pgm_path} bulunamadı!")
-        return
+def convert_pgm_to_png(pgm_path, png_path=None):
+    """
+    PGM occupancy grid'i PNG'ye çevirir.
+    png_path verilmezse aynı klasörde aynı isimle .png üretir.
+    Dönüş: yazılan PNG dosyasının yolu.
+    """
+    if not os.path.isfile(pgm_path):
+        raise FileNotFoundError(f"PGM not found: {pgm_path}")
 
-    try:
-        with Image.open(pgm_path) as img:
-            img.save(output_png_path, "PNG")
-        print(f"Başarılı: Harita PNG formatına çevrildi -> {output_png_path}")
-    except Exception as e:
-        print(f"Dönüştürme sırasında hata oluştu: {e}")
+    if png_path is None:
+        base, _ = os.path.splitext(pgm_path)
+        png_path = f"{base}.png"
+
+    img = Image.open(pgm_path)
+    img.save(png_path)
+    return png_path
+
 
 if __name__ == "__main__":
-    convert_ros_map()
+    # Kullanım: python convert_map.py [pgm_path] [png_path]
+    # Argüman yoksa eski agriculture_map1 yolu (manuel CLI kolaylığı).
+    default_pgm = os.path.expanduser("~/AgriFleet/agriculture_map1/map_from_bag.pgm")
+    pgm = sys.argv[1] if len(sys.argv) > 1 else default_pgm
+    png = sys.argv[2] if len(sys.argv) > 2 else None
+    out = convert_pgm_to_png(pgm, png)
+    print(f"Converted {pgm} -> {out}")

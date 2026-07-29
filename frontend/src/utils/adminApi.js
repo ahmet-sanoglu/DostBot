@@ -134,6 +134,31 @@ export async function deleteMapBoundary(mapId) {
   });
 }
 
+/** Yeni harita kaydı — sourceDir'deki map.yaml + pgm/png doğrulanır; otomatik aktive edilmez. */
+export async function createMap(name, sourceDir) {
+  return fetchJson(`${API_BASE}/api/maps`, {
+    method: 'POST',
+    headers: adminHeaders(),
+    body: JSON.stringify({ name, sourceDir }),
+  });
+}
+
+/** Tek aktif harita kuralı — diğerleri pasif; UI reload ile yeni imageDir/veriye geçer. */
+export async function activateMap(mapId) {
+  return fetchJson(`${API_BASE}/api/maps/${encodeURIComponent(mapId)}/activate`, {
+    method: 'PUT',
+    headers: adminHeaders(),
+  });
+}
+
+/** data/<mapId>/ siler; imageDir dokunulmaz. Aktif / map_default backend'de reddedilir. */
+export async function deleteMap(mapId) {
+  return fetchJson(`${API_BASE}/api/maps/${encodeURIComponent(mapId)}`, {
+    method: 'DELETE',
+    headers: adminHeaders(),
+  });
+}
+
 /** Dikdörtgen yasak bölge ekler (geofence'ten farklı: birden fazla bölge tutulabilir). */
 export async function createForbiddenZone(mapId, zone) {
   return fetchJson(`${API_BASE}/api/maps/${encodeURIComponent(mapId)}/forbidden-zones`, {

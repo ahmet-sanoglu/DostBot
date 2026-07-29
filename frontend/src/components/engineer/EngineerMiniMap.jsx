@@ -8,76 +8,29 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Topic } from 'roslib';
 import { useRos } from '../../context/RosContext';
 import { useTelemetry } from '../../context/TelemetryContext';
-import { normalizeAngle } from '../../utils/rosNavigation';
+import {
+  MAP_ROTATION,
+  getImageSize,
+  getMapFitTransform,
+  worldToPixel,
+  imagePixelToWorld,
+  displayLocalToImagePixel,
+  worldToCanvas,
+  quaternionToYaw,
+  smoothPose,
+  computeRotatedCanvasHeight,
+} from '../../utils/mapCoordinates';
 
 const MAP_METADATA_URL = 'http://localhost:5000/api/map/metadata';
 const MAP_IMAGE_URL = 'http://localhost:5000/api/map/image';
 const ODOMETRY_TOPIC = '/odometry/filtered_uwb';
-const MAP_ROTATION = Math.PI / 2;
 const MINI_MAP_WIDTH = 340;
 const DRAW_MAP_WIDTH = 480;
-const POS_SMOOTH_ALPHA = 0.35;
-const YAW_SMOOTH_ALPHA = 0.25;
 /**
  * Tooltip "yakın" eşiği (canvas px). Dünya metresi değil ekran pikseli —
  * zoom/fitScale değişince bile fare hissi sabit kalsın diye.
  */
 const LOCATION_HIT_RADIUS_PX = 12;
-
-/** Harita görüntüsünün piksel boyutları. */
-function getImageSize(imageObj) {
-  return { width: imageObj.width, height: imageObj.height };
-}
-
-/** Canvas'a sığdırma ölçeği ve ortalama ofseti (döndürülmüş harita için). */
-function getMapFitTransform(imageSize, canvasWidth, canvasHeight) {
-  const displayW = imageSize.height;
-  const displayH = imageSize.width;
-
-  if (canvasWidth <= 0 || canvasHeight <= 0) {
-    return { fitScale: 1, centerX: 0, centerY: 0 };
-  }
-
-  const fitScale = Math.min(canvasWidth / displayW, canvasHeight / displayH);
-  const centerX = (canvasWidth - displayW * fitScale) / 2;
-  const centerY = (canvasHeight - displayH * fitScale) / 2;
-
-  return { fitScale, centerX, centerY, displayW, displayH };
-}
-
-/** Dünya koordinatı (m) → ham harita pikseli. */
-function worldToPixel(worldX, worldY, metadata, imageSize) {
-  const pixelX = (worldX - metadata.origin[0]) / metadata.resolution;
-  const pixelY = imageSize.height - (worldY - metadata.origin[1]) / metadata.resolution;
-  return { x: pixelX, y: pixelY };
-}
-
-/**
- * Dünya → canvas ekran pikseli (tooltip hit-test için).
- * drawImage ile aynı translate/scale/rotate zincirini uygular.
- */
-function worldToCanvas(worldX, worldY, mapMeta, imageSize, layout) {
-  const pixel = worldToPixel(worldX, worldY, mapMeta, imageSize);
-  const localX = pixel.y;
-  const localY = imageSize.width - 1 - pixel.x;
-  return {
-    x: layout.centerX + localX * layout.fitScale,
-    y: layout.centerY + localY * layout.fitScale,
-  };
-}
-
-function displayLocalToImagePixel(localX, localY, imageSize) {
-  return {
-    x: imageSize.width - 1 - localY,
-    y: localX,
-  };
-}
-
-function imagePixelToWorld(pixelX, pixelY, metadata, imageSize) {
-  const worldX = pixelX * metadata.resolution + metadata.origin[0];
-  const worldY = (imageSize.height - pixelY) * metadata.resolution + metadata.origin[1];
-  return { x: worldX, y: worldY };
-}
 
 /** Canvas tıklamasını dünya koordinatına çevirir (geofence / yasak bölge köşe için). */
 function canvasToWorld(canvasX, canvasY, mapMeta, imageObj, canvasWidth, canvasHeight) {
@@ -96,32 +49,6 @@ function canvasToWorld(canvasX, canvasY, mapMeta, imageObj, canvasWidth, canvasH
 
   const imgPixel = displayLocalToImagePixel(localX, localY, imageSize);
   return imagePixelToWorld(imgPixel.x, imgPixel.y, mapMeta, imageSize);
-}
-
-function quaternionToYaw(x, y, z, w) {
-  return Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
-}
-
-function angleDifference(a, b) {
-  let diff = a - b;
-  while (diff > Math.PI) diff -= 2 * Math.PI;
-  while (diff < -Math.PI) diff += 2 * Math.PI;
-  return diff;
-}
-
-function smoothPose(raw, prev) {
-  if (!prev) {
-    return { x: raw.x, y: raw.y, yaw: normalizeAngle(raw.yaw) };
-  }
-
-  let smoothedYaw = normalizeAngle(prev.yaw)
-    + angleDifference(raw.yaw, prev.yaw) * YAW_SMOOTH_ALPHA;
-
-  return {
-    x: prev.x + POS_SMOOTH_ALPHA * (raw.x - prev.x),
-    y: prev.y + POS_SMOOTH_ALPHA * (raw.y - prev.y),
-    yaw: normalizeAngle(smoothedYaw),
-  };
 }
 
 function drawRobotMarker(ctx, x, y, yaw, scale) {
@@ -265,6 +192,8 @@ export default function EngineerMiniMap({
   const [mapHeight, setMapHeight] = useState(Math.round(MINI_MAP_WIDTH * 0.75));
   const [previewCorner, setPreviewCorner] = useState(null);
   const [tooltip, setTooltip] = useState(null);
+  // Son tıklanan — bilgi satırı; drawMode/forbiddenDrawMode köşe eklemeyi değiştirmez, üzerine eklenir.
+  const [lastClickedWorldPos, setLastClickedWorldPos] = useState(null);
 
   const anyDrawMode = drawMode || forbiddenDrawMode;
   const mapWidth = anyDrawMode ? DRAW_MAP_WIDTH : MINI_MAP_WIDTH;
@@ -289,8 +218,7 @@ export default function EngineerMiniMap({
 
   useEffect(() => {
     if (!imageObj) return;
-    const aspect = imageObj.width / imageObj.height;
-    setMapHeight(Math.round(mapWidth * aspect));
+    setMapHeight(computeRotatedCanvasHeight(imageObj, mapWidth));
   }, [imageObj, mapWidth]);
 
   useEffect(() => {
@@ -448,6 +376,10 @@ export default function EngineerMiniMap({
 
     const point = getCanvasPoint(event, canvas);
     const world = canvasToWorld(point.x, point.y, mapMeta, imageObj, canvas.width, canvas.height);
+    // Bilgi satırı: çizim modundan bağımsız; harita dışı tıklamada önceki değeri koru
+    if (world) {
+      setLastClickedWorldPos({ x: world.x, y: world.y });
+    }
     if (!world) return;
 
     // Poligon: her tık +vertex; dikdörtgen: parent 1. köşe / 2. köşe ile bitirir (çoklu köşe yok)
@@ -521,35 +453,42 @@ export default function EngineerMiniMap({
   }
 
   return (
-    <div
-      className={`engineer-mini-map${anyDrawMode ? ' engineer-mini-map--draw' : ''}`}
-      style={{ width: mapWidth, height: mapHeight }}
-    >
-      {loadError && (
-        <p className="engineer-mini-map__error">{loadError}</p>
+    <div className="engineer-mini-map-wrap">
+      <div
+        className={`engineer-mini-map${anyDrawMode ? ' engineer-mini-map--draw' : ''}`}
+        style={{ width: mapWidth, height: mapHeight }}
+      >
+        {loadError && (
+          <p className="engineer-mini-map__error">{loadError}</p>
+        )}
+        {hintText && (
+          <p className="engineer-mini-map__hint">{hintText}</p>
+        )}
+        {tooltip && (
+          <div
+            className="engineer-mini-map__tooltip"
+            style={{ left: tooltip.x, top: tooltip.y }}
+          >
+            <strong>{tooltip.name}</strong>
+            X {tooltip.worldX.toFixed(2)} m · Y {tooltip.worldY.toFixed(2)} m
+          </div>
+        )}
+        <canvas
+          ref={canvasRef}
+          className="engineer-mini-map__canvas"
+          width={mapWidth}
+          height={mapHeight}
+          onClick={handleCanvasClick}
+          onDoubleClick={handleDoubleClick}
+          onMouseMove={handleMouseMove}
+          onMouseLeave={handleMouseLeave}
+        />
+      </div>
+      {lastClickedWorldPos && (
+        <p className="autonomous-panel__meta map-click-coord">
+          Son tıklanan: X {lastClickedWorldPos.x.toFixed(2)} m, Y {lastClickedWorldPos.y.toFixed(2)} m
+        </p>
       )}
-      {hintText && (
-        <p className="engineer-mini-map__hint">{hintText}</p>
-      )}
-      {tooltip && (
-        <div
-          className="engineer-mini-map__tooltip"
-          style={{ left: tooltip.x, top: tooltip.y }}
-        >
-          <strong>{tooltip.name}</strong>
-          X {tooltip.worldX.toFixed(2)} m · Y {tooltip.worldY.toFixed(2)} m
-        </div>
-      )}
-      <canvas
-        ref={canvasRef}
-        className="engineer-mini-map__canvas"
-        width={mapWidth}
-        height={mapHeight}
-        onClick={handleCanvasClick}
-        onDoubleClick={handleDoubleClick}
-        onMouseMove={handleMouseMove}
-        onMouseLeave={handleMouseLeave}
-      />
     </div>
   );
 }
