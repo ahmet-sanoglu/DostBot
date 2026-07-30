@@ -4,12 +4,13 @@
 const API_BASE = 'http://localhost:5000';
 
 /** fetch + JSON parse; HTTP hata kodunda exception fırlatır. */
-async function fetchJson(url) {
-  const res = await fetch(url);
+async function fetchJson(url, options = {}) {
+  const res = await fetch(url, options);
+  const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(`Request failed (${res.status})`);
+    throw new Error(data.error || `Request failed (${res.status})`);
   }
-  return res.json();
+  return data;
 }
 
 /** Aktif haritanın kimliğini ve adını döner (maps.json içinde isActive: true olan). */
@@ -22,14 +23,24 @@ export async function fetchMaps() {
   return fetchJson(`${API_BASE}/api/maps`);
 }
 
-/** Haritaya kayıtlı konum noktalarını listeler. */
-export async function fetchMapLocations(mapId) {
-  return fetchJson(`${API_BASE}/api/maps/${encodeURIComponent(mapId)}/locations`);
-}
-
-/** Operatör panelindeki görev listesini döner; eksik tek adımlı görevler backend'de tamamlanır. */
+/** Operatör panelindeki görev listesini döner. */
 export async function fetchMapTasks(mapId) {
   return fetchJson(`${API_BASE}/api/maps/${encodeURIComponent(mapId)}/tasks`);
+}
+
+/**
+ * Görev güncelleme (PUT) — operatör pin toggle için (PIN yok, içerik aynı kalmalı).
+ * Mühendis tam düzenleme adminApi.updateMapTask + PIN kullanır.
+ */
+export async function updateMapTask(mapId, taskId, task) {
+  return fetchJson(
+    `${API_BASE}/api/maps/${encodeURIComponent(mapId)}/tasks/${encodeURIComponent(taskId)}`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(task),
+    },
+  );
 }
 
 /** Dikdörtgen yasak bölgeleri döner (hedef geçilebilirlik kontrolünde kullanılır). */

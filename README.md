@@ -6,7 +6,7 @@ Dost Tarim Teknolojileri bunyesinde gelistirilen, serada calisan otonom/manuel k
 
 Robot / ROS 2 -> rosbridge (WebSocket :9090) -> React Frontend -> MapView / Joystick / Gorevler
                  -> nav_relay.py (NavigateToPose ActionClient) <-> /agrifleet/nav_*
-Flask Backend :5000 -> harita gorseli + metadata + konum/gorev/harita verisi (JSON)
+Flask Backend :5000 -> harita gorseli + metadata + gorev/harita verisi (JSON)
 
 Teknoloji yigini:
 - Frontend: React + Vite, react-router-dom, roslibjs, nipplejs, recharts
@@ -19,7 +19,7 @@ Teknoloji yigini:
 - backend/convert_map.py (PGM -> PNG donusumu)
 - backend/.env (MAP_DIRECTORY, ADMIN_PIN, git'e dahil degil)
 - backend/data/maps.json (harita kayit defteri)
-- backend/data/map_id/ (locations.json, tasks.json, forbidden_zones.json, boundary.json)
+- backend/data/map_id/ (tasks.json, forbidden_zones.json, boundary.json)
 - frontend/src/pages/DashboardPage.jsx (Operator - Kontrol Paneli, /)
 - frontend/src/pages/EngineerPage.jsx (Muhendis Paneli, /muhendis)
 - frontend/src/components/dashboard/ (Operator bilesenleri)
@@ -32,7 +32,7 @@ Teknoloji yigini:
 
 Kontrol Paneli (/) - Operator arayuzu. Harita, joystick, onceden tanimlanmis gorevleri baslatma. Ham koordinat girisi yok.
 
-Muhendis Paneli (/muhendis) - Konum/gorev tanimlama, harita secimi, gecilebilir alan siniri cizme. Basit PIN korumasi var, gercek kimlik dogrulama degil.
+Muhendis Paneli (/muhendis) - Gorev tanimlama, harita secimi, gecilebilir alan siniri cizme. Basit PIN korumasi var, gercek kimlik dogrulama degil.
 
 ## Guvenlik Katmanlari
 

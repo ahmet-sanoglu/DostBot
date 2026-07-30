@@ -1,8 +1,6 @@
-// Mühendis panelindeki küçük canlı harita — robot, konumlar, geofence ve yasak dikdörtgen çizimi.
+// Mühendis panelindeki küçük canlı harita — robot, geofence ve yasak dikdörtgen çizimi.
 // Geofence (drawMode): çoklu köşe poligon; yasak bölge (forbiddenDrawMode): tam 2 tık = 1 dikdörtgen.
 // İki mod ayrı state — aynı tıklama dinleyicisinde karışmasın, biri açılınca diğeri kapansın diye.
-// Konum tooltip: locationMarkersRef'teki canvas px; LOCATION_HIT_RADIUS_PX içindeyse gösterilir.
-// Tooltip drawMode/forbiddenDrawMode'dan bağımsız — çizim sırasında da konum adı okunabilsin.
 
 import React, { useEffect, useRef, useState } from 'react';
 import { Topic } from 'roslib';
@@ -15,7 +13,6 @@ import {
   worldToPixel,
   imagePixelToWorld,
   displayLocalToImagePixel,
-  worldToCanvas,
   quaternionToYaw,
   smoothPose,
   computeRotatedCanvasHeight,
@@ -26,11 +23,6 @@ const MAP_IMAGE_URL = 'http://localhost:5000/api/map/image';
 const ODOMETRY_TOPIC = '/odometry/filtered_uwb';
 const MINI_MAP_WIDTH = 340;
 const DRAW_MAP_WIDTH = 480;
-/**
- * Tooltip "yakın" eşiği (canvas px). Dünya metresi değil ekran pikseli —
- * zoom/fitScale değişince bile fare hissi sabit kalsın diye.
- */
-const LOCATION_HIT_RADIUS_PX = 12;
 
 /** Canvas tıklamasını dünya koordinatına çevirir (geofence / yasak bölge köşe için). */
 function canvasToWorld(canvasX, canvasY, mapMeta, imageObj, canvasWidth, canvasHeight) {
@@ -163,9 +155,8 @@ function getCanvasPoint(event, canvas) {
   };
 }
 
-/** Mühendis paneli mini harita — canlı robot, konumlar, sınır ve yasak bölge çizimi. */
+/** Mühendis paneli mini harita — canlı robot, sınır ve yasak bölge çizimi. */
 export default function EngineerMiniMap({
-  locations = [],
   boundaryPolygon = null,
   draftVertices = [],
   draftClosed = false,
@@ -180,8 +171,6 @@ export default function EngineerMiniMap({
 }) {
   const canvasRef = useRef(null);
   const layoutRef = useRef(null);
-  /** Son çizimde üretilen canvas konumları — hit-test dünya→piksel dönüşümünü tekrarlamasın. */
-  const locationMarkersRef = useRef([]);
   const smoothedPoseRef = useRef(null);
   const { ros } = useRos();
   const { setPose: setTelemetryPose } = useTelemetry();
@@ -191,7 +180,6 @@ export default function EngineerMiniMap({
   const [loadError, setLoadError] = useState(null);
   const [mapHeight, setMapHeight] = useState(Math.round(MINI_MAP_WIDTH * 0.75));
   const [previewCorner, setPreviewCorner] = useState(null);
-  const [tooltip, setTooltip] = useState(null);
   // Son tıklanan — bilgi satırı; drawMode/forbiddenDrawMode köşe eklemeyi değiştirmez, üzerine eklenir.
   const [lastClickedWorldPos, setLastClickedWorldPos] = useState(null);
 
@@ -265,7 +253,7 @@ export default function EngineerMiniMap({
     const imageSize = getImageSize(imageObj);
     const layout = getMapFitTransform(imageSize, canvas.width, canvas.height);
     const { fitScale, centerX, centerY } = layout;
-    layoutRef.current = layout;
+    layoutRef.current = layout; // şimdilik saklanır; tıklama dönüşümü canvasToWorld ile yeniden hesaplar
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = '#f0fdf4';
@@ -320,31 +308,6 @@ export default function EngineerMiniMap({
       ctx.fill();
     }
 
-    const markers = [];
-    locations.forEach((location) => {
-      if (typeof location.x !== 'number' || typeof location.y !== 'number') return;
-      const pixel = worldToPixel(location.x, location.y, mapMeta, imageSize);
-      const markerRadius = Math.max(3, 5 / fitScale);
-      const canvasPoint = worldToCanvas(location.x, location.y, mapMeta, imageSize, layout);
-
-      markers.push({
-        canvasX: canvasPoint.x,
-        canvasY: canvasPoint.y,
-        name: location.name || 'Konum',
-        worldX: location.x,
-        worldY: location.y,
-      });
-
-      ctx.beginPath();
-      ctx.fillStyle = '#025539';
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 1.5 / fitScale;
-      ctx.arc(pixel.x, pixel.y, markerRadius, 0, 2 * Math.PI);
-      ctx.fill();
-      ctx.stroke();
-    });
-    locationMarkersRef.current = markers;
-
     if (robotPose) {
       const pixel = worldToPixel(robotPose.x, robotPose.y, mapMeta, imageSize);
       drawRobotMarker(ctx, pixel.x, pixel.y, robotPose.yaw, fitScale);
@@ -357,7 +320,6 @@ export default function EngineerMiniMap({
     mapMeta,
     mapWidth,
     mapHeight,
-    locations,
     robotPose,
     boundaryPolygon,
     draftVertices,
@@ -403,44 +365,16 @@ export default function EngineerMiniMap({
     const canvas = canvasRef.current;
     if (!canvas || !mapMeta || !imageObj) return;
 
-    const point = getCanvasPoint(event, canvas);
-
     // 1. köşe seçiliyken fareyle karşı köşe önizlemesi (2. tık kesinleştirir)
     if (forbiddenDrawMode && forbiddenCorner) {
+      const point = getCanvasPoint(event, canvas);
       const world = canvasToWorld(point.x, point.y, mapMeta, imageObj, canvas.width, canvas.height);
       setPreviewCorner(world);
-    }
-
-    // Tooltip: drawMode kapalı/açık fark etmez — eşik LOCATION_HIT_RADIUS_PX (canvas)
-    const markers = locationMarkersRef.current;
-    let nearest = null;
-    let nearestDist = LOCATION_HIT_RADIUS_PX;
-    markers.forEach((marker) => {
-      const dx = point.x - marker.canvasX;
-      const dy = point.y - marker.canvasY;
-      const dist = Math.hypot(dx, dy);
-      if (dist <= nearestDist) {
-        nearestDist = dist;
-        nearest = marker;
-      }
-    });
-
-    if (nearest) {
-      setTooltip({
-        x: nearest.canvasX,
-        y: nearest.canvasY,
-        name: nearest.name,
-        worldX: nearest.worldX,
-        worldY: nearest.worldY,
-      });
-    } else {
-      setTooltip(null);
     }
   };
 
   const handleMouseLeave = () => {
     setPreviewCorner(null);
-    setTooltip(null);
   };
 
   let hintText = null;
@@ -463,15 +397,6 @@ export default function EngineerMiniMap({
         )}
         {hintText && (
           <p className="engineer-mini-map__hint">{hintText}</p>
-        )}
-        {tooltip && (
-          <div
-            className="engineer-mini-map__tooltip"
-            style={{ left: tooltip.x, top: tooltip.y }}
-          >
-            <strong>{tooltip.name}</strong>
-            X {tooltip.worldX.toFixed(2)} m · Y {tooltip.worldY.toFixed(2)} m
-          </div>
         )}
         <canvas
           ref={canvasRef}

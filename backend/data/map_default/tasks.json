@@ -24,7 +24,6 @@
   {
     "id": "task_66e3ae31",
     "name": "Su beposu",
-    "locationId": "loc_042429a0",
     "steps": [
       {
         "x": 9.0,
@@ -61,7 +60,6 @@
   {
     "id": "task_d03ebfd5",
     "name": "Test Noktası",
-    "locationId": "loc_0d72edd3",
     "steps": [
       {
         "x": 1.0,
@@ -99,7 +97,6 @@
   {
     "id": "task_8877148d",
     "name": "Anlik test",
-    "locationId": "loc_bb768ef1",
     "steps": [
       {
         "x": -0.5,
@@ -114,7 +111,6 @@
   {
     "id": "task_c9b9572a",
     "name": "acil dur testi2",
-    "locationId": "loc_80545279",
     "steps": [
       {
         "x": -0.3,

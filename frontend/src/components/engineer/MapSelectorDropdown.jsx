@@ -1,7 +1,7 @@
 // Mühendis paneli harita seçici — ekle / aktif yap / sil.
-// Neden reload: aktif harita değişince imageDir + locations/tasks hepsi baştan yüklenmeli;
+// Neden reload: aktif harita değişince imageDir + tasks hepsi baştan yüklenmeli;
 // kısmi state güncellemesi eski harita verisini karıştırırdı.
-// Sil: ConfirmDialog — geri alınamaz konum/görev silinmesini yanlış tıklamayla engellemek için.
+// Sil: ConfirmDialog — geri alınamaz görev silinmesini yanlış tıklamayla engellemek için.
 // Aktif harita ve map_default UI'da Sil yok (backend de reddeder).
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -94,7 +94,7 @@ export default function MapSelectorDropdown({ activeMap }) {
     setActivatingId(mapId);
     try {
       await activateMap(mapId);
-      // Full reload: eski haritanın konum/görev/görsel state'i bellekte kalmasın.
+      // Full reload: eski haritanın görev/görsel state'i bellekte kalmasın.
       window.location.reload();
     } catch (err) {
       setListError(err.message || 'Harita aktifleştirilemedi');
@@ -255,7 +255,7 @@ export default function MapSelectorDropdown({ activeMap }) {
         title="Haritayı Sil"
         message={
           confirmMap
-            ? `${confirmMap.name} haritasını silmek istediğinize emin misiniz? Bu haritaya ait tüm konum ve görevler de silinecek. Bu işlem geri alınamaz.`
+            ? `${confirmMap.name} haritasını silmek istediğinize emin misiniz? Bu haritaya ait tüm görevler de silinecek. Bu işlem geri alınamaz.`
             : ''
         }
         onConfirm={handleConfirmDelete}

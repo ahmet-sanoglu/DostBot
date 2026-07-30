@@ -1,11 +1,15 @@
 // Operatör panelindeki canlı harita bileşeni.
 // ROS odometrisinden robot konumunu alır, occupancy grid PNG'sini çizer, zoom/pan ve rota izi gösterir.
 // Koordinat dönüşümleri birçok küçük fonksiyona bölündü — her biri tek bir adımı temsil eder (dünya↔piksel↔canvas).
+// Nav2 /plan çizimi kaldırıldı — görev kalan adımları drawUpcomingRoute ile gösterilir (çift rota kafa karıştırmasın).
+// Geçmiş iz kırmızı, gelecek rota yeşil: yönü renk ile ayırt etmek için; ikisi de aynı nokta tekniği
+// (çizgi stili farkı "başka bir katman" gibi görünüp yoğunluğu bozmasın diye).
 
 import React, { useEffect, useRef, useState } from 'react';
 import { Topic } from 'roslib';
 import { useRos } from '../context/RosContext';
 import { useTelemetry } from '../context/TelemetryContext';
+import { useNavigation } from '../context/NavigationContext';
 
 import { FREE_SPACE_THRESHOLD, isOccupancyPixelPassable } from '../utils/mapPassability';
 import {
@@ -325,38 +329,42 @@ function drawGoalMarker(ctx, x, y, scale, isPassable = true) {
   ctx.restore();
 }
 
-/** /plan topic'inden gelen rotayı kesik turkuaz çizgi olarak çizer. */
-function drawPlanPath(ctx, planPath, mapMeta, imageObj, scale) {
-  if (!planPath?.length || !mapMeta || !imageObj) return;
+/**
+ * Dünya polyline → trail noktaları (TRAIL_MIN_DIST_M aralıklı örnekleme).
+ * Canlı iz odometride aynı mesafede nokta biriktirir; gelecek rota da aynı yoğunlukta
+ * görünsün diye — ayrı bir çizgi stili "farklı katman" izlenimi veriyordu.
+ */
+function samplePolylineTrail(waypoints, minDist = TRAIL_MIN_DIST_M) {
+  if (!Array.isArray(waypoints) || waypoints.length === 0) return [];
 
-  const imageSize = getImageSize(imageObj);
-  const pixels = planPath.map(({ x, y }) =>
-    worldToPixel(x, y, mapMeta, imageSize),
-  );
+  const samples = [{ x: waypoints[0].x, y: waypoints[0].y }];
+  for (let i = 1; i < waypoints.length; i += 1) {
+    const a = waypoints[i - 1];
+    const b = waypoints[i];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-9) continue;
 
-  ctx.save();
-  ctx.setLineDash([5, 5]);
-  ctx.strokeStyle = '#06A89B';
-  ctx.lineWidth = 2 / scale;
-  ctx.lineJoin = 'round';
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  pixels.forEach((point, index) => {
-    if (index === 0) {
-      ctx.moveTo(point.x, point.y);
-    } else {
-      ctx.lineTo(point.x, point.y);
+    const steps = Math.max(1, Math.round(len / minDist));
+    for (let s = 1; s <= steps; s += 1) {
+      const t = s / steps;
+      samples.push({ x: a.x + dx * t, y: a.y + dy * t });
     }
-  });
-  ctx.stroke();
-  ctx.restore();
+  }
+  return samples;
 }
 
-/** Robot hareket izi — snap'li worldToDisplayPixel: iz noktaları engel üzerinde kalmasın diye. */
-function drawPositionTrail(ctx, trail, mapMeta, imageObj, imageData, scale) {
-  const dotRadius = 1.5 / scale;
+/**
+ * İz noktalarını dolu daire olarak çizer — geçmiş ve gelecek rotanın ortak tekniği.
+ * Tek fark fillStyle (renk); kalınlık/snap/örnekleme paylaşılır ki iki rota görsel dil bir olsun.
+ * snap'li worldToDisplayPixel: noktalar engel üzerinde kalmasın diye.
+ */
+function drawTrailDots(ctx, trail, mapMeta, imageObj, imageData, scale, fillStyle) {
+  if (!trail?.length || !mapMeta || !imageObj) return;
 
-  ctx.fillStyle = 'rgba(6, 168, 155, 0.35)';
+  const dotRadius = 1.5 / scale;
+  ctx.fillStyle = fillStyle;
 
   for (const point of trail) {
     const { x, y } = worldToDisplayPixel(
@@ -371,6 +379,40 @@ function drawPositionTrail(ctx, trail, mapMeta, imageObj, imageData, scale) {
     ctx.arc(x, y, dotRadius, 0, 2 * Math.PI);
     ctx.fill();
   }
+}
+
+/** Gelecek rota (yeşil) — aktif görevde kalan hedefler; robot → adımlar. */
+function drawUpcomingRoute(ctx, remainingSteps, robotPose, mapMeta, imageObj, imageData, scale) {
+  if (!robotPose) return;
+  if (!Array.isArray(remainingSteps) || remainingSteps.length === 0) return;
+
+  const waypoints = [
+    { x: robotPose.x, y: robotPose.y },
+    ...remainingSteps,
+  ];
+  const trail = samplePolylineTrail(waypoints);
+  drawTrailDots(
+    ctx,
+    trail,
+    mapMeta,
+    imageObj,
+    imageData,
+    scale,
+    'rgba(6, 168, 155, 0.35)',
+  );
+}
+
+/** Geçmiş iz (kırmızı) — odometri birikimi; drawUpcomingRoute ile aynı drawTrailDots. */
+function drawPositionTrail(ctx, trail, mapMeta, imageObj, imageData, scale) {
+  drawTrailDots(
+    ctx,
+    trail,
+    mapMeta,
+    imageObj,
+    imageData,
+    scale,
+    'rgba(220, 38, 38, 0.35)',
+  );
 }
 
 /** Ana harita bileşeni: veri yükleme, odometri dinleme, canvas çizimi ve zoom/pan etkileşimi. */
@@ -390,7 +432,8 @@ const MapView = () => {
   const mapImageDataRef = useRef(null);
   const smoothedPoseRef = useRef(null);
   const { setPose: setTelemetryPose } = useTelemetry();
-  const { ros, status: rosStatus, planPath } = useRos();
+  const { ros, status: rosStatus } = useRos();
+  const { activeTaskRemainingSteps } = useNavigation();
 
   // Zoom ve pan durumu
   const [scale, setScale] = useState(1);
@@ -553,14 +596,23 @@ const MapView = () => {
     ctx.rotate(-MAP_ROTATION);
     ctx.drawImage(themedImageObj, 0, 0);
 
-    if (mapMeta && planPath.length > 0) {
-      drawPlanPath(ctx, planPath, mapMeta, imageObj, totalScale);
-    }
-
     if (mapMeta && positionTrail.length > 0) {
       drawPositionTrail(
         ctx,
         positionTrail,
+        mapMeta,
+        imageObj,
+        mapImageDataRef.current,
+        totalScale,
+      );
+    }
+
+    // Kalan görev adımları — kırmızı geçmiş izle aynı nokta tekniği, yeşil
+    if (mapMeta && robotPose) {
+      drawUpcomingRoute(
+        ctx,
+        activeTaskRemainingSteps,
+        robotPose,
         mapMeta,
         imageObj,
         mapImageDataRef.current,
@@ -587,7 +639,7 @@ const MapView = () => {
     positionTrail,
     scale,
     offset,
-    planPath,
+    activeTaskRemainingSteps,
   ]);
 
   const scaleRef = useRef(scale);

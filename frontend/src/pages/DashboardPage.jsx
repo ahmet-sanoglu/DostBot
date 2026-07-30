@@ -17,6 +17,7 @@ export default function DashboardPage() {
   const {
     activeMap,
     tasks,
+    setTasks,
     forbiddenZones,
     boundaryPolygon,
     loading: mapDataLoading,
@@ -73,6 +74,7 @@ export default function DashboardPage() {
       <ControlPanel
         activeMap={activeMap}
         tasks={tasks}
+        onTasksChange={setTasks}
         tasksLoading={mapDataLoading}
         tasksError={mapDataError}
         mapReady={mapReady}

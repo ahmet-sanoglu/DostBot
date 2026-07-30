@@ -53,39 +53,7 @@ function adminHeaders(extra = {}) {
   };
 }
 
-/** Yeni konum ekler; backend otomatik tek adımlı görev de oluşturur. */
-export async function createMapLocation(mapId, location) {
-  return fetchJson(`${API_BASE}/api/maps/${encodeURIComponent(mapId)}/locations`, {
-    method: 'POST',
-    headers: adminHeaders(),
-    body: JSON.stringify(location),
-  });
-}
-
-/** PUT — konum güncellenince backend bağlı otomatik görevi de senkronize eder. */
-export async function updateMapLocation(mapId, locationId, location) {
-  return fetchJson(
-    `${API_BASE}/api/maps/${encodeURIComponent(mapId)}/locations/${encodeURIComponent(locationId)}`,
-    {
-      method: 'PUT',
-      headers: adminHeaders(),
-      body: JSON.stringify(location),
-    },
-  );
-}
-
-/** Konumu siler; locationId ile bağlı otomatik görev backend'de de silinir. */
-export async function deleteMapLocation(mapId, locationId) {
-  return fetchJson(
-    `${API_BASE}/api/maps/${encodeURIComponent(mapId)}/locations/${encodeURIComponent(locationId)}`,
-    {
-      method: 'DELETE',
-      headers: adminHeaders(),
-    },
-  );
-}
-
-/** Çok adımlı rota görevi ekler (birden fazla konumu sırayla birleştirmek için). */
+/** Rota görevi ekler (tek veya çok adımlı; X/Y/Yaw doğrudan görevde). */
 export async function createMapTask(mapId, task) {
   return fetchJson(`${API_BASE}/api/maps/${encodeURIComponent(mapId)}/tasks`, {
     method: 'POST',

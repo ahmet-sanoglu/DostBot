@@ -336,12 +336,10 @@ export function NavigationProvider({ children }) {
       currentStep: 1,
       totalSteps: steps.length,
       stepActionLabel: null,
-    };
-
-    activeTaskRef.current = {
-      ...progress,
       steps,
     };
+
+    activeTaskRef.current = progress;
     setActiveTaskProgress(progress);
     pendingStepsRef.current = steps.length > 1 ? steps.slice(1) : [];
 
@@ -485,6 +483,17 @@ export function NavigationProvider({ children }) {
     [isConnected, emergencyStopped, coverageStatus, queueBusy, activeTaskProgress, navDistanceRemaining],
   );
 
+  // currentStep'ten sona kalan hedefler — MapView drawUpcomingRoute için.
+  // Adım ilerledikçe slice kayar; tamamlanan nokta listeden düşer (ayrı "sil" animasyonu gerekmez).
+  const activeTaskRemainingSteps = useMemo(() => {
+    const steps = activeTaskProgress?.steps;
+    if (!Array.isArray(steps) || steps.length === 0) {
+      return [];
+    }
+    const from = Math.max(0, (activeTaskProgress.currentStep || 1) - 1);
+    return steps.slice(from).map((step) => ({ x: step.x, y: step.y }));
+  }, [activeTaskProgress]);
+
   const value = useMemo(
     () => ({
       lastSentGoal,
@@ -496,6 +505,7 @@ export function NavigationProvider({ children }) {
       emergencyStopNavigation,
       emergencyStopped,
       activeTaskProgress,
+      activeTaskRemainingSteps,
       recentEvents,
       statusText,
       isConnected,
@@ -509,6 +519,7 @@ export function NavigationProvider({ children }) {
       emergencyStopNavigation,
       emergencyStopped,
       activeTaskProgress,
+      activeTaskRemainingSteps,
       recentEvents,
       statusText,
       isConnected,

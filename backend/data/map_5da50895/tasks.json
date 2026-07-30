@@ -12,6 +12,7 @@
         }
       }
     ],
+    "pinned": false,
     "description": "test"
   },
   {
@@ -36,5 +37,137 @@
       }
     ],
     "description": "2 adım"
+  },
+  {
+    "id": "task_8ef213cd",
+    "name": "deneme1",
+    "steps": [
+      {
+        "x": -0.03,
+        "y": 0.85,
+        "yaw": 0.0,
+        "action": {
+          "type": "wait"
+        }
+      },
+      {
+        "x": 0.13,
+        "y": 1.44,
+        "yaw": 0.0,
+        "action": {
+          "type": "wait"
+        }
+      },
+      {
+        "x": 0.9,
+        "y": 2.33,
+        "yaw": 0.0,
+        "action": {
+          "type": "wait"
+        }
+      }
+    ]
+  },
+  {
+    "id": "task_585a22ce",
+    "name": "Base Konumuna Git",
+    "steps": [
+      {
+        "x": 0.0,
+        "y": 0.0,
+        "yaw": 0.0,
+        "action": {
+          "type": "wait"
+        }
+      }
+    ],
+    "pinned": true,
+    "description": "Base Konumu"
+  },
+  {
+    "id": "task_89b54e4e",
+    "name": "deneme2",
+    "steps": [
+      {
+        "x": -0.21,
+        "y": 0.61,
+        "yaw": 0.0,
+        "action": {
+          "type": "wait"
+        }
+      },
+      {
+        "x": 0.01,
+        "y": 1.17,
+        "yaw": 0.0,
+        "action": {
+          "type": "wait"
+        }
+      },
+      {
+        "x": 0.34,
+        "y": 1.91,
+        "yaw": 0.0,
+        "action": {
+          "type": "wait"
+        }
+      }
+    ],
+    "pinned": false
+  },
+  {
+    "id": "task_a03a3a8c",
+    "name": "uzundeneme",
+    "steps": [
+      {
+        "x": 0.54,
+        "y": -1.0,
+        "yaw": 0.0,
+        "action": {
+          "type": "wait"
+        }
+      },
+      {
+        "x": 2.47,
+        "y": -1.45,
+        "yaw": 0.0,
+        "action": {
+          "type": "wait"
+        }
+      },
+      {
+        "x": 3.95,
+        "y": -0.26,
+        "yaw": 0.0,
+        "action": {
+          "type": "wait"
+        }
+      },
+      {
+        "x": 3.63,
+        "y": 2.05,
+        "yaw": 0.0,
+        "action": {
+          "type": "wait"
+        }
+      },
+      {
+        "x": 2.84,
+        "y": 1.15,
+        "yaw": 0.0,
+        "action": {
+          "type": "wait"
+        }
+      },
+      {
+        "x": 2.27,
+        "y": -0.91,
+        "yaw": 0.0,
+        "action": {
+          "type": "wait"
+        }
+      }
+    ],
+    "pinned": false
   }
 ]

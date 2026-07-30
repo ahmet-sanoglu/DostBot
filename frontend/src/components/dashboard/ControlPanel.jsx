@@ -2,9 +2,13 @@
 // CSS'te .control-panel overflow-y: auto ile kaydırılabilir — kartlar ekranı aşınca
 // "Son Olaylar" görünür alanın dışında kalmasın diye (sayfa değil, panel içi scroll).
 // Görev listesi max-height + iç scroll ile joystick'i aşağı itmez.
+// Pin: sık kullanılan görevler scroll içinde kaybolmasın diye üstte tutulur;
+// sıralama stabil (pinned önce, grup içi mevcut sıra) — her tıkta liste zıplamasın.
+// PUT ile tasks.json'a yazılır; ayrı favori store yok (harita değişince pin kaybolmasın).
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { INVALID_GOAL_MESSAGE } from '../../utils/mapPassability';
+import { updateMapTask } from '../../utils/mapApi';
 import Joystick from '../Joystick';
 import RecentEventsPanel from './RecentEventsPanel';
 import StatusCard from './StatusCard';
@@ -23,6 +27,17 @@ function taskHasTillAction(task) {
   return steps.some((step) => step?.action?.type === 'till');
 }
 
+/** Sabitlenenler önce; her grubun kendi sırası korunur (stable partition). */
+function sortTasksByPinned(tasks) {
+  const pinned = [];
+  const rest = [];
+  for (const task of tasks) {
+    if (task.pinned) pinned.push(task);
+    else rest.push(task);
+  }
+  return [...pinned, ...rest];
+}
+
 /**
  * Sağ kontrol paneli — harita yanında duran kartların kapsayıcısı.
  * Till onayı geofence'ten sonra sorulur: geçersiz hedefi önce elemek, operatörü gereksiz
@@ -31,6 +46,7 @@ function taskHasTillAction(task) {
 export default function ControlPanel({
   activeMap,
   tasks,
+  onTasksChange,
   tasksLoading,
   tasksError,
   mapReady,
@@ -44,6 +60,9 @@ export default function ControlPanel({
   onCloseInvalidGoalPopup,
 }) {
   const [tillConfirmTask, setTillConfirmTask] = useState(null);
+  const [pinningId, setPinningId] = useState(null);
+
+  const sortedTasks = useMemo(() => sortTasksByPinned(tasks), [tasks]);
 
   // Sıra bilinçli: geofence fail → invalid popup; geçince till varsa ikinci onay; yoksa direkt start
   const handleStartTask = (task) => {
@@ -62,6 +81,33 @@ export default function ControlPanel({
     setTillConfirmTask(null);
     if (task) {
       onStartTask(task);
+    }
+  };
+
+  const handleTogglePin = async (task) => {
+    // İçerik aynı + pinned ters — backend PIN istemez; yalnızca sabitleme değişir
+    if (!activeMap?.id || !task?.id || pinningId) return;
+
+    const nextPinned = !task.pinned;
+    const payload = {
+      name: task.name,
+      steps: task.steps,
+      pinned: nextPinned,
+    };
+    if (typeof task.description === 'string' && task.description.trim()) {
+      payload.description = task.description.trim();
+    }
+
+    setPinningId(task.id);
+    try {
+      const updated = await updateMapTask(activeMap.id, task.id, payload);
+      onTasksChange?.(tasks.map((item) => (
+        item.id === task.id ? { ...item, ...updated, pinned: nextPinned } : item
+      )));
+    } catch (err) {
+      console.warn('[pin] görev sabitlenemedi:', err.message);
+    } finally {
+      setPinningId(null);
     }
   };
 
@@ -97,14 +143,26 @@ export default function ControlPanel({
           <p className="autonomous-panel__meta">Bu harita için tanımlı görev yok.</p>
         )}
 
-        {!tasksLoading && !tasksError && tasks.length > 0 && (
+        {!tasksLoading && !tasksError && sortedTasks.length > 0 && (
           <ul className="task-list">
-            {tasks.map((task) => {
+            {sortedTasks.map((task) => {
               const stepCount = Array.isArray(task.steps) ? task.steps.length : 0;
               const canStart = mapReady && stepCount > 0 && !queueBusy;
+              const isPinned = Boolean(task.pinned);
 
               return (
-                <li key={task.id || task.name} className="task-card">
+                <li key={task.id || task.name} className={`task-card${isPinned ? ' task-card--pinned' : ''}`}>
+                  <button
+                    type="button"
+                    className={`task-card__pin${isPinned ? ' task-card__pin--active' : ''}`}
+                    onClick={() => handleTogglePin(task)}
+                    disabled={pinningId === task.id}
+                    aria-label={isPinned ? 'Sabitlemeyi kaldır' : 'Görevi sabitle'}
+                    aria-pressed={isPinned}
+                    title={isPinned ? 'Sabitlemeyi kaldır' : 'Sabitle'}
+                  >
+                    📌
+                  </button>
                   <div className="task-card__body">
                     <strong className="task-card__name">{task.name || 'Adsız görev'}</strong>
                     {task.description && (

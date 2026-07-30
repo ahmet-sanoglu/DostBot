@@ -1,10 +1,14 @@
 // Mühendis paneli — görev oluşturma/düzenleme modal formu.
 // Her noktanın kendi dropdown'ı vardır: aynı rotada A'da sürüm, B'de bekleme gibi
 // çoklu tarla/çoklu eylem senaryoları tek görevde tanımlanabilsin diye (tek finalAction yetmez).
+// İki panel: sol form (elle X/Y/Yaw/eylem) + sağ TaskRouteMap — haritadan ekleme alternatifidir,
+// form davranışını değiştirmez; tek steps state ile anında senkron kalırlar.
+// extraWide + sabit 85vh (App.css): adım eklenince modal büyümesin, liste iç scroll yapsın.
 
 import React, { useEffect, useState } from 'react';
 import { degreesToRadians } from '../../utils/rosNavigation';
 import EngineerModal from './EngineerModal';
+import TaskRouteMap from './TaskRouteMap';
 
 const STEP_ACTION_OPTIONS = [
   { value: 'wait', label: 'Bekle' },
@@ -146,122 +150,137 @@ export default function AddTaskModal({
   const hasValidSteps = steps.some((step) => parseStep(step) !== null);
 
   return (
-    <EngineerModal open={open} onClose={onClose} wide tall ariaLabelledBy={modalTitleId}>
+    <EngineerModal
+      open={open}
+      onClose={onClose}
+      wide
+      tall
+      extraWide
+      ariaLabelledBy={modalTitleId}
+    >
       <h3 id={modalTitleId}>{modalTitle}</h3>
-      <form className="engineer-form engineer-form--task" onSubmit={handleSubmit}>
-        <label className="engineer-form__field engineer-form__field--full">
-          <span>Görev adı</span>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Örn. Sabah rutini"
-            required
-          />
-        </label>
+      {/* Sol form | sağ harita — CSS grid; adım rozeti harita numarasıyla eşleşsin diye index+1 */}
+      <div className="engineer-task-modal">
+        <form className="engineer-form engineer-form--task" onSubmit={handleSubmit}>
+          <label className="engineer-form__field engineer-form__field--full">
+            <span>Görev adı</span>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Örn. Sabah rutini"
+              required
+            />
+          </label>
 
-        <label className="engineer-form__field engineer-form__field--full">
-          <span>Açıklama (opsiyonel)</span>
-          <textarea
-            className="engineer-form__textarea"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="Örn. Sabah rutini, sera boyunca ilerler"
-            rows={2}
-          />
-        </label>
+          <label className="engineer-form__field engineer-form__field--full">
+            <span>Açıklama (opsiyonel)</span>
+            <textarea
+              className="engineer-form__textarea"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Örn. Sabah rutini, sera boyunca ilerler"
+              rows={2}
+            />
+          </label>
 
-        <div className="engineer-form__field engineer-form__field--full">
-          <span>Noktalar</span>
-          <ul className="engineer-task-steps">
-            {steps.map((step, index) => (
-              <li key={index} className="engineer-task-steps__block">
-                <div className="engineer-task-steps__row">
-                  <span className="engineer-task-steps__label">Nokta {index + 1}</span>
-                  <label className="engineer-task-steps__input">
-                    <span>X (m)</span>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={step.x}
-                      onChange={(e) => updateStep(index, 'x', e.target.value)}
-                      required
-                    />
+          <div className="engineer-form__field engineer-form__field--full engineer-form__field--steps">
+            <span>Noktalar</span>
+            <ul className="engineer-task-steps">
+              {steps.map((step, index) => (
+                <li key={index} className="engineer-task-steps__block">
+                  <div className="engineer-task-steps__row">
+                    <span className="engineer-task-steps__badge" aria-hidden="true">
+                      {index + 1}
+                    </span>
+                    <span className="engineer-task-steps__label">Nokta {index + 1}</span>
+                    <label className="engineer-task-steps__input">
+                      <span>X (m)</span>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={step.x}
+                        onChange={(e) => updateStep(index, 'x', e.target.value)}
+                        required
+                      />
+                    </label>
+                    <label className="engineer-task-steps__input">
+                      <span>Y (m)</span>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={step.y}
+                        onChange={(e) => updateStep(index, 'y', e.target.value)}
+                        required
+                      />
+                    </label>
+                    <label className="engineer-task-steps__input">
+                      <span>Yaw (°)</span>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={step.yaw}
+                        onChange={(e) => updateStep(index, 'yaw', e.target.value)}
+                        required
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="autonomous-btn autonomous-btn--ghost autonomous-btn--small engineer-task-steps__remove"
+                      onClick={() => removeStep(index)}
+                      disabled={steps.length <= 1}
+                      aria-label={`Nokta ${index + 1} kaldır`}
+                    >
+                      Kaldır
+                    </button>
+                  </div>
+                  {/* Nokta bazlı eylem — NavigationContext bu step'e varınca seçilen türü çalıştırır */}
+                  <label className="engineer-task-steps__action">
+                    <span>Bu noktada ne yapılsın</span>
+                    <select
+                      className="engineer-form__select"
+                      value={step.actionType}
+                      onChange={(e) => updateStep(index, 'actionType', e.target.value)}
+                    >
+                      {STEP_ACTION_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
                   </label>
-                  <label className="engineer-task-steps__input">
-                    <span>Y (m)</span>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={step.y}
-                      onChange={(e) => updateStep(index, 'y', e.target.value)}
-                      required
-                    />
-                  </label>
-                  <label className="engineer-task-steps__input">
-                    <span>Yaw (°)</span>
-                    <input
-                      type="number"
-                      step="0.1"
-                      value={step.yaw}
-                      onChange={(e) => updateStep(index, 'yaw', e.target.value)}
-                      required
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    className="autonomous-btn autonomous-btn--ghost autonomous-btn--small engineer-task-steps__remove"
-                    onClick={() => removeStep(index)}
-                    disabled={steps.length <= 1}
-                    aria-label={`Nokta ${index + 1} kaldır`}
-                  >
-                    Kaldır
-                  </button>
-                </div>
-                {/* Nokta bazlı eylem — NavigationContext bu step'e varınca seçilen türü çalıştırır */}
-                <label className="engineer-task-steps__action">
-                  <span>Bu noktada ne yapılsın</span>
-                  <select
-                    className="engineer-form__select"
-                    value={step.actionType}
-                    onChange={(e) => updateStep(index, 'actionType', e.target.value)}
-                  >
-                    {STEP_ACTION_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </li>
-            ))}
-          </ul>
-          <button
-            type="button"
-            className="autonomous-btn autonomous-btn--ghost autonomous-btn--small engineer-task-steps__add"
-            onClick={addStep}
-          >
-            + Yeni Nokta Ekle
-          </button>
-        </div>
+                </li>
+              ))}
+            </ul>
+            <button
+              type="button"
+              className="autonomous-btn autonomous-btn--ghost autonomous-btn--small engineer-task-steps__add"
+              onClick={addStep}
+            >
+              + Yeni Nokta Ekle
+            </button>
+          </div>
 
-        {error && (
-          <p className="engineer-form__error">{error}</p>
-        )}
+          {error && (
+            <p className="engineer-form__error">{error}</p>
+          )}
 
-        <div className="engineer-form__actions">
-          <button type="button" className="autonomous-btn autonomous-btn--ghost" onClick={onClose}>
-            İptal
-          </button>
-          <button
-            type="submit"
-            className="autonomous-btn"
-            disabled={saving || !hasValidSteps}
-          >
-            {saving ? 'Kaydediliyor…' : 'Kaydet'}
-          </button>
-        </div>
-      </form>
+          <div className="engineer-form__actions">
+            <button type="button" className="autonomous-btn autonomous-btn--ghost" onClick={onClose}>
+              İptal
+            </button>
+            <button
+              type="submit"
+              className="autonomous-btn"
+              disabled={saving || !hasValidSteps}
+            >
+              {saving ? 'Kaydediliyor…' : 'Kaydet'}
+            </button>
+          </div>
+        </form>
+
+        <TaskRouteMap steps={steps} onStepsChange={setSteps} />
+      </div>
     </EngineerModal>
   );
 }

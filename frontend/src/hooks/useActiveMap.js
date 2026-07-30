@@ -1,4 +1,4 @@
-// Backend'den aktif harita ve ona bağlı tüm verileri (konum, görev, sınır, yasak bölge) yükler.
+// Backend'den aktif harita ve ona bağlı verileri (görev, sınır, yasak bölge) yükler.
 // Operatör ve mühendis paneli sayfa açıldığında bu hook ile harita verisini alır.
 // Tek bir useEffect içinde paralel istekler atılır; sonuç state'e yazılır.
 
@@ -7,7 +7,6 @@ import {
   fetchActiveMap,
   fetchMapBoundary,
   fetchMapForbiddenZones,
-  fetchMapLocations,
   fetchMapTasks,
 } from '../utils/mapApi';
 
@@ -17,7 +16,6 @@ import {
  */
 export function useActiveMap() {
   const [activeMap, setActiveMap] = useState(null);
-  const [locations, setLocations] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [forbiddenZones, setForbiddenZones] = useState([]);
   const [boundaryPolygon, setBoundaryPolygon] = useState(null);
@@ -36,9 +34,7 @@ export function useActiveMap() {
         const map = await fetchActiveMap();
         if (cancelled) return;
 
-        // Promise.all: dört isteği paralel atar; hepsi bitince tek seferde state güncellenir.
-        const [mapLocations, mapTasks, mapForbiddenZones, mapBoundary] = await Promise.all([
-          fetchMapLocations(map.id),
+        const [mapTasks, mapForbiddenZones, mapBoundary] = await Promise.all([
           fetchMapTasks(map.id),
           fetchMapForbiddenZones(map.id),
           fetchMapBoundary(map.id),
@@ -47,14 +43,12 @@ export function useActiveMap() {
         if (cancelled) return;
 
         setActiveMap(map);
-        setLocations(Array.isArray(mapLocations) ? mapLocations : []);
         setTasks(Array.isArray(mapTasks) ? mapTasks : []);
         setForbiddenZones(Array.isArray(mapForbiddenZones) ? mapForbiddenZones : []);
         setBoundaryPolygon(mapBoundary);
       } catch (err) {
         if (!cancelled) {
           setActiveMap(null);
-          setLocations([]);
           setTasks([]);
           setForbiddenZones([]);
           setBoundaryPolygon(null);
@@ -76,8 +70,8 @@ export function useActiveMap() {
 
   return {
     activeMap,
-    locations,
     tasks,
+    setTasks,
     forbiddenZones,
     boundaryPolygon,
     loading,

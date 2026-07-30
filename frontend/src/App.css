@@ -162,7 +162,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
   padding: 16px;
   border: 0.5px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -170,8 +170,47 @@
   transition: all 0.2s ease;
 }
 
+.task-card--pinned {
+  border-color: rgba(6, 168, 155, 0.45);
+  background: rgba(6, 168, 155, 0.06);
+}
+
+.task-card__pin {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  font-size: 1rem;
+  line-height: 1;
+  opacity: 0.35;
+  cursor: pointer;
+  filter: grayscale(1);
+  transition: opacity 0.15s ease, filter 0.15s ease, background 0.15s ease;
+}
+
+.task-card__pin:hover:not(:disabled) {
+  opacity: 0.7;
+  background: var(--color-bg-elevated);
+}
+
+.task-card__pin--active {
+  opacity: 1;
+  filter: none;
+}
+
+.task-card__pin:disabled {
+  cursor: wait;
+}
+
 .task-card__body {
   min-width: 0;
+  flex: 1;
 }
 
 .task-card__name {
@@ -1426,33 +1465,62 @@
   font-size: 0.875rem;
 }
 
-.engineer-page__strip {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
+.engineer-page__body {
+  /* Dashboard .main-content gibi: sol harita | sağ panel bloğu */
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 1fr);
   gap: 18px;
+  align-items: stretch;
+}
+
+.engineer-page__map {
+  /* Önceki strip düzeni gibi: canvas (340/480) + padding; sütunu doldurma */
+  width: fit-content;
+  max-width: 100%;
+  height: fit-content;
+  max-height: 100%;
+  align-self: start;
+  justify-self: start;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  overflow: auto;
+}
+
+.engineer-page__map .panel-card__title--compact {
+  margin-bottom: 8px;
   flex-shrink: 0;
 }
 
-.engineer-page__mini {
-  flex: 0 0 auto;
-  width: fit-content;
+.engineer-page__map--draw {
+  /* çizim modunda canvas 480px — kart yine fit-content */
   max-width: 100%;
-  padding: 16px;
 }
 
-.engineer-page__mini .panel-card__title--compact {
-  margin-bottom: 8px;
+.engineer-page__side {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 18px;
 }
 
 .engineer-page__status {
-  flex: 1 1 240px;
-  min-width: 220px;
-  max-width: 320px;
+  min-width: 0;
 }
 
 .engineer-page__status .panel-card {
   height: 100%;
+}
+
+.engineer-page__side-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+  min-height: 0;
 }
 
 .engineer-mini-map {
@@ -1500,32 +1568,6 @@
   background: rgba(255, 255, 255, 0.9);
   border-radius: var(--radius-md);
   text-align: center;
-}
-
-.engineer-mini-map__tooltip {
-  position: absolute;
-  z-index: 3;
-  padding: 6px 8px;
-  border-radius: var(--radius-md);
-  background: rgba(15, 23, 42, 0.92);
-  color: #f8fafc;
-  font-size: 0.6875rem;
-  line-height: 1.35;
-  pointer-events: none;
-  white-space: nowrap;
-  transform: translate(8px, -110%);
-  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.25);
-}
-
-.engineer-mini-map__tooltip strong {
-  display: block;
-  margin-bottom: 2px;
-  font-weight: var(--font-weight-medium);
-}
-
-.engineer-page__mini--draw {
-  width: fit-content;
-  max-width: 100%;
 }
 
 .boundary-settings {
@@ -1588,14 +1630,6 @@
   color: #b91c1c;
   background: rgba(254, 242, 242, 0.92);
   z-index: 1;
-}
-
-.engineer-page__main {
-  flex: 0 0 auto;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 20px;
-  align-items: start;
 }
 
 .engineer-list--settings {
@@ -1735,8 +1769,25 @@ body.engineer-modal-open .engineer-page {
   width: min(100%, 560px);
 }
 
+.engineer-modal--extra-wide {
+  width: min(100%, 1040px);
+}
+
 .engineer-modal--tall {
   max-height: calc(100dvh - 24px);
+}
+
+/* Görev modalı: sabit yükseklik — adım eklenince büyümesin, liste içinde kaydırılsın */
+.engineer-modal--extra-wide.engineer-modal--tall {
+  height: 85vh;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.engineer-modal--extra-wide.engineer-modal--tall > h3 {
+  flex-shrink: 0;
 }
 
 .engineer-modal h3 {
@@ -1850,8 +1901,44 @@ body.engineer-modal-open .engineer-page {
   cursor: pointer;
 }
 
+.engineer-task-modal {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 20px;
+  align-items: stretch;
+  overflow: hidden;
+}
+
 .engineer-form--task {
+  display: flex;
+  flex-direction: column;
   gap: 14px;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.engineer-form--task .engineer-form__field--full:not(.engineer-form__field--steps) {
+  flex-shrink: 0;
+}
+
+.engineer-form__field--steps {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.engineer-form__field--steps > span,
+.engineer-form__field--steps .engineer-task-steps__add {
+  flex-shrink: 0;
+}
+
+.engineer-form--task .engineer-form__actions {
+  flex-shrink: 0;
+  margin-top: auto;
 }
 
 .engineer-task-steps {
@@ -1861,6 +1948,10 @@ body.engineer-modal-open .engineer-page {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .engineer-task-steps__block {
@@ -1875,9 +1966,77 @@ body.engineer-modal-open .engineer-page {
 
 .engineer-task-steps__row {
   display: grid;
-  grid-template-columns: auto 1fr 1fr 1fr auto;
+  grid-template-columns: auto auto 1fr 1fr 1fr auto;
   gap: 8px;
   align-items: end;
+}
+
+.engineer-task-steps__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-bottom: 8px;
+  border-radius: 50%;
+  background: #06A89B;
+  color: #fff;
+  font-size: 0.6875rem;
+  font-weight: var(--font-weight-medium);
+  line-height: 1;
+}
+
+.task-route-map {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.task-route-map__hint {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+}
+
+.task-route-map__frame {
+  position: relative;
+  overflow: hidden;
+  border: 0.5px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: #f0fdf4;
+}
+
+.task-route-map__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.task-route-map__error {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 12px;
+  font-size: 0.8125rem;
+  color: #b91c1c;
+  background: rgba(255, 255, 255, 0.9);
+  text-align: center;
+}
+
+@media (max-width: 900px) {
+  .engineer-task-modal {
+    grid-template-columns: 1fr;
+  }
+
+  .task-route-map__frame {
+    width: 100% !important;
+    max-width: 420px;
+  }
 }
 
 .engineer-task-steps__action {
@@ -1946,56 +2105,18 @@ body.engineer-modal-open .engineer-page {
   margin-top: 4px;
 }
 
-.engineer-location-picker {
-  list-style: none;
-  margin: 8px 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-height: 220px;
-  overflow-y: auto;
-}
-
-.engineer-location-picker__item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-bg);
-  cursor: pointer;
-}
-
-.engineer-location-picker__label {
-  flex: 1;
-  font-size: 0.8125rem;
-  color: var(--color-text-primary);
-}
-
-.engineer-location-picker__order {
-  font-size: 0.75rem;
-  font-weight: var(--font-weight-medium);
-  color: var(--brand-teal);
-}
-
 @media (max-width: 1100px) {
-  .engineer-page__main {
-    grid-template-columns: 1fr 1fr;
+  .engineer-page__body {
+    grid-template-columns: 1fr;
   }
 
-  .engineer-list--settings {
-    grid-column: 1 / -1;
+  .engineer-page__side-main {
+    grid-template-columns: 1fr 1fr;
   }
 }
 
 @media (max-width: 720px) {
-  .engineer-page__main {
+  .engineer-page__side-main {
     grid-template-columns: 1fr;
-  }
-
-  .engineer-page__status {
-    max-width: none;
   }
 }

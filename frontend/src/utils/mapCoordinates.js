@@ -72,7 +72,7 @@ export function displayLocalToImagePixel(localX, localY, imageSize) {
   };
 }
 
-/** Dünya → canvas ekran pikseli (tooltip hit-test, marker overlay vb. için). */
+/** Dünya → canvas ekran pikseli (overlay / çizim için). */
 export function worldToCanvas(worldX, worldY, mapMeta, imageSize, layout) {
   const pixel = worldToPixel(worldX, worldY, mapMeta, imageSize);
   const local = imagePixelToDisplayLocal(pixel.x, pixel.y, imageSize);

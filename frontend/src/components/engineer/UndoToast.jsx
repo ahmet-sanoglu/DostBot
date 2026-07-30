@@ -1,4 +1,4 @@
-// Silme sonrası geri alma (undo) bildirimi — yanlış silinen konum/görevi kısa sürede geri getirmek için.
+// Silme sonrası geri alma (undo) bildirimi — yanlış silinen görevi kısa sürede geri getirmek için.
 // Akış (EngineerPage): DELETE öncesi snapshot → pendingUndoRef → toast açılır →
 //   "Geri Al" → snapshot ile POST (yeni id); 6 sn dolunca veya yeni mühendis işleminde onDismiss → ref temizlenir.
 // createPortal ile body'ye basılır; mühendis modal stacking context'inden etkilenmez.

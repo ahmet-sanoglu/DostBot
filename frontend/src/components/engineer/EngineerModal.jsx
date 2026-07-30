@@ -1,6 +1,7 @@
-// Mühendis paneli modal kabuğu — Konum Ekle ve Görev Ekle formlarını sarmalar.
+// Mühendis paneli modal kabuğu — Görev Ekle ve benzeri formları sarmalar.
 // createPortal ile document.body'ye render edilir; sayfa içinde kalınca z-index/backdrop-filter
 // sorunları yaşanıyordu (butonlar overlay üstünde görünüyordu) — portal bunu çözer.
+// extraWide: iki panelli Görev Ekle (form + harita) için; wide tek başına dar kalıyordu.
 
 import React, { useEffect } from 'react';
 import { createPortal } from 'react-dom';
@@ -14,6 +15,7 @@ export default function EngineerModal({
   onClose,
   wide = false,
   tall = false,
+  extraWide = false,
   ariaLabelledBy,
   children,
 }) {
@@ -38,7 +40,7 @@ export default function EngineerModal({
       />
       <div className="engineer-modal-layer">
         <div
-          className={`engineer-modal${wide ? ' engineer-modal--wide' : ''}${tall ? ' engineer-modal--tall' : ''}`}
+          className={`engineer-modal${wide ? ' engineer-modal--wide' : ''}${tall ? ' engineer-modal--tall' : ''}${extraWide ? ' engineer-modal--extra-wide' : ''}`}
           role="dialog"
           aria-modal="true"
           aria-labelledby={ariaLabelledBy}

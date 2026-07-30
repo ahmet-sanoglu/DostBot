@@ -1,5 +1,5 @@
 // Yeniden kullanılabilir onay penceresi — mühendis panelinde yıkıcı eylemlerden önce sorar.
-// Senaryolar: Konum Sil, Görev Sil, Alan Sınırını Sil (ConfirmDialog / BoundarySettings).
+// Senaryolar: Görev Sil, Alan Sınırını Sil, Harita Sil (ConfirmDialog / BoundarySettings / MapSelector).
 // EngineerModal (createPortal) üzerine kurulur; aynı z-index/backdrop çözümünü paylaşır
 // (sayfa içinde render edilince butonlar overlay üstünde kalıyordu).
 
