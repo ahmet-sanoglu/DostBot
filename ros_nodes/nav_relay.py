@@ -66,10 +66,11 @@ class NavRelay(Node):
         handle.get_result_async().add_done_callback(self.on_result)
 
     def on_feedback(self, fb):
-        # Action feedback'i web'e taşınabilir, sade bir kalan mesafe mesajına dönüştürür.
+        # Kalan mesafe + kurtarma sayısı — UI erken "zorlanıyor" uyarısı için
         self.status_pub.publish(String(data=json.dumps({
             "type": "feedback",
             "distance_remaining": fb.feedback.distance_remaining,
+            "number_of_recoveries": fb.feedback.number_of_recoveries,
         })))
 
     def on_result(self, future):

@@ -3,7 +3,7 @@
 // Kaydırma: .engineer-page height:100% + overflow-y:auto (App.css) — üstteki
 // .workspace__content overflow:hidden olduğu için içerik uzayınca sayfa kayamazdı;
 // sabit 100vh yerine esnek yükseklik + iç scroll ile Ayarlar kartı erişilebilir kalır.
-// Layout (engineer-page__body): sol harita | sağ blok — dashboard main-content gibi;
+// Layout (engineer-page__body): sol harita+kamera | sağ blok — dashboard main-content gibi;
 // sağda Durum üstte, Görevler+Ayarlar altta yan yana — harita sürekli görünür kalsın,
 // üç eşit sütunda kartların sıkışıp kaybolmasını önlemek için.
 
@@ -24,6 +24,7 @@ import {
   fetchMapTasks,
 } from '../utils/mapApi';
 import StatusCard from '../components/dashboard/StatusCard';
+import CameraFeed from '../components/CameraFeed';
 import AddTaskModal from '../components/engineer/AddTaskModal';
 import BoundarySettings from '../components/engineer/BoundarySettings';
 import ConfirmDialog from '../components/engineer/ConfirmDialog';
@@ -94,6 +95,9 @@ export default function EngineerPage() {
    * Toast 6 sn veya yeni bir mühendis işlemi gelince clearPendingUndo ile düşer — süre dolunca POST yapılamaz.
    */
   const pendingUndoRef = useRef(null);
+  const mapCardRef = useRef(null);
+  /** Harita kartının ölçülen dış boyutu — kamera kartına sabit px olarak kopyalanır. */
+  const [mapCardSize, setMapCardSize] = useState(null);
 
   const clearPendingUndo = useCallback(() => {
     pendingUndoRef.current = null;
@@ -127,6 +131,29 @@ export default function EngineerPage() {
       loadMapData();
     }
   }, [authenticated, loadMapData]);
+
+  // Harita kartı dış kutusu → kamera kartına birebir sabit width/height (px)
+  useEffect(() => {
+    if (!authenticated) return undefined;
+    const el = mapCardRef.current;
+    if (!el) return undefined;
+
+    const syncSize = () => {
+      const width = Math.round(el.offsetWidth);
+      const height = Math.round(el.offsetHeight);
+      if (width <= 0 || height <= 0) return;
+      setMapCardSize((prev) => (
+        prev && prev.width === width && prev.height === height
+          ? prev
+          : { width, height }
+      ));
+    };
+
+    syncSize();
+    const observer = new ResizeObserver(syncSize);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [authenticated, boundaryDrawMode, forbiddenDrawMode, loading, activeMap?.id]);
 
   /** Yeni görev ekler veya düzenleme modunda mevcut görevi günceller. */
   const handleSaveTask = async (task, mode = 'create') => {
@@ -414,27 +441,47 @@ export default function EngineerPage() {
         <p className="engineer-page__error">{loadError}</p>
       )}
 
-      {/* Dış grid: harita sol; sağ sütun kendi içinde Durum / Görevler|Ayarlar */}
+      {/* Dış grid: sol harita|kamera yan yana; sağ Durum / Görevler|Ayarlar */}
       <div className="engineer-page__body">
-        {/* Kart fit-content — sütunu doldurmasın; canvas 340/480 px kalsın */}
-        <div className={`engineer-page__map panel-card${mapDrawActive ? ' engineer-page__map--draw' : ''}`}>
-          <div className="panel-card__title panel-card__title--compact">
-            <span className="panel-card__icon">🗺️</span>
-            Harita
+        <div className="engineer-page__visuals">
+          {/* Kart fit-content — sütunu doldurmasın; canvas 340/480 px kalsın */}
+          <div
+            ref={mapCardRef}
+            className={`engineer-page__map panel-card${mapDrawActive ? ' engineer-page__map--draw' : ''}`}
+          >
+            <div className="panel-card__title panel-card__title--compact">
+              <span className="panel-card__icon">🗺️</span>
+              Harita
+            </div>
+            <EngineerMiniMap
+              boundaryPolygon={boundaryPolygon}
+              draftVertices={boundaryDraft}
+              draftClosed={boundaryDraftClosed}
+              drawMode={boundaryDrawMode}
+              onVertexAdd={handleBoundaryVertexAdd}
+              onDrawFinish={handleFinishBoundaryDraw}
+              forbiddenZones={forbiddenZones}
+              forbiddenDrawMode={forbiddenDrawMode}
+              forbiddenCorner={forbiddenCorner}
+              forbiddenDraftRect={forbiddenPendingRect}
+              onForbiddenCornerClick={handleForbiddenCornerClick}
+            />
           </div>
-          <EngineerMiniMap
-            boundaryPolygon={boundaryPolygon}
-            draftVertices={boundaryDraft}
-            draftClosed={boundaryDraftClosed}
-            drawMode={boundaryDrawMode}
-            onVertexAdd={handleBoundaryVertexAdd}
-            onDrawFinish={handleFinishBoundaryDraw}
-            forbiddenZones={forbiddenZones}
-            forbiddenDrawMode={forbiddenDrawMode}
-            forbiddenCorner={forbiddenCorner}
-            forbiddenDraftRect={forbiddenPendingRect}
-            onForbiddenCornerClick={handleForbiddenCornerClick}
-          />
+
+          {/* Haritanın sağında; dış kutu harita kartıyla aynı sabit px */}
+          <div
+            className="engineer-page__camera panel-card"
+            style={mapCardSize ? {
+              width: mapCardSize.width,
+              height: mapCardSize.height,
+            } : undefined}
+          >
+            <div className="panel-card__title panel-card__title--compact">
+              <span className="panel-card__icon">📷</span>
+              Kamera
+            </div>
+            <CameraFeed className="engineer-page__camera-feed" />
+          </div>
         </div>
 
         <div className="engineer-page__side">

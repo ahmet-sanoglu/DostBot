@@ -1,7 +1,7 @@
 // Üst şerit: logo, sayfa başlığı, ROS bağlantı göstergesi, demo batarya ve Acil Dur butonu.
 // Tüm sayfalarda (Kontrol + Mühendis) ortak görünür.
 
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Topic } from 'roslib';
 import { useNavigation } from '../../context/NavigationContext';
@@ -9,16 +9,34 @@ import { useRos } from '../../context/RosContext';
 import { CMD_VEL_JOY_TOPIC } from '../../utils/rosTopics';
 import logo from '../../assets/dost-tarim-logo.png';
 const DEMO_BATTERY_PERCENT = 87;
+const ESTOP_COOLDOWN_MS = 1000;
 
 /**
  * Acil Dur: hem aktif Nav2 görevini iptal eder (emergencyStopNavigation)
  * hem joystick/manuel hızı sıfırlar (/cmd_vel/joy'a 0 Twist gönderir).
+ * 1 sn debounce — çift tıklamada iki iptal/publish üst üste binmesin.
  */
 function EmergencyStopButton() {
   const { ros } = useRos();
   const { emergencyStopNavigation } = useNavigation();
+  const [locked, setLocked] = useState(false);
+  const cooldownTimerRef = useRef(null);
+
+  useEffect(() => () => {
+    if (cooldownTimerRef.current) {
+      window.clearTimeout(cooldownTimerRef.current);
+    }
+  }, []);
 
   const handleEmergencyStop = () => {
+    if (locked) return;
+
+    setLocked(true);
+    cooldownTimerRef.current = window.setTimeout(() => {
+      setLocked(false);
+      cooldownTimerRef.current = null;
+    }, ESTOP_COOLDOWN_MS);
+
     emergencyStopNavigation();
 
     if (!ros) return;
@@ -38,7 +56,12 @@ function EmergencyStopButton() {
   };
 
   return (
-    <button type="button" className="estop-btn" onClick={handleEmergencyStop}>
+    <button
+      type="button"
+      className={`estop-btn${locked ? ' estop-btn--cooldown' : ''}`}
+      onClick={handleEmergencyStop}
+      disabled={locked}
+    >
       ACİL DUR
     </button>
   );

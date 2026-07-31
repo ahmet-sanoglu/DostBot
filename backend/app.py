@@ -9,12 +9,16 @@ import os
 import re
 import secrets
 import shutil
+import socket
+import tempfile
 import uuid
 from datetime import datetime, timezone
-from flask import Flask, jsonify, request, send_from_directory
+from urllib.parse import urlparse
+from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_cors import CORS
 import yaml
 from dotenv import load_dotenv
+import cv2
 
 from convert_map import convert_pgm_to_png
 
@@ -44,6 +48,8 @@ MAPS_FILE = os.path.join(DATA_DIR, "maps.json")
 # Harita kimliğinde sadece harf, rakam, tire ve alt çizgiye izin verilir (path injection önlemi).
 MAP_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 ADMIN_PIN = os.getenv("ADMIN_PIN", "")
+# RTSP kamera URL — boşsa /api/camera/stream 503; tarayıcı native RTSP oynatamadığı için MJPEG gerekir.
+CAMERA_RTSP_URL = os.getenv("CAMERA_RTSP_URL", "")
 
 
 def _read_json_file(path, default=None):
@@ -55,10 +61,39 @@ def _read_json_file(path, default=None):
 
 
 def _write_json_file(path, data):
-    """Veriyi JSON olarak diske yazar; klasör yoksa önce oluşturur."""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    """
+    Veriyi JSON olarak diske yazar; klasör yoksa önce oluşturur.
+
+    Neden atomik (tmp + fsync + os.replace)?
+    Doğrudan hedefe "r+"/seek yazımında yeni içerik kısaysa eski baytlar kalır
+    (task_history.json sonunda fazladan ] gibi bozuk JSON).
+    Önce tmp'ye "w" (truncate) yazıp replace etmek: yarım yazım hedefi bozmaz,
+    kısa yeniden yazımda eski kuyruk kalmaz.
+    """
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+
+    # Aynı klasörde tmp — rename/replace aynı filesystem'de atomik olsun
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=".tmp_",
+        suffix=".json",
+        dir=directory or None,
+    )
+    try:
+        # "w": truncate; "a"/"r+" yok — eski içerik birikmesin
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())  # replace öncesi diske insin; crash'te yarım tmp kalsın, hedef bozulmasın
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def _load_maps():
@@ -381,6 +416,8 @@ def create_map():
     _write_json_file(_map_data_file(map_id, "tasks.json"), [])
     _write_json_file(_map_data_file(map_id, "forbidden_zones.json"), [])
     _write_json_file(_map_data_file(map_id, "boundary.json"), None)
+    # Boş geçmiş: GET/POST hemen çalışsın; dosya yok hatası olmasın
+    _write_json_file(_map_data_file(map_id, "task_history.json"), [])
 
     entry = {
         "id": map_id,
@@ -574,6 +611,61 @@ def delete_map_task(map_id, task_id):
     return jsonify({"ok": True})
 
 
+# Görev geçmişi — nav_relay/Nav2'dan bağımsız yan log; UI modalı okur.
+# Üst sınır: disk şişmesin, eski kayıtlar düşürülsün.
+TASK_HISTORY_MAX = 200
+TASK_HISTORY_STATUSES = {"başlatıldı", "başarılı", "iptal edildi", "başarısız"}
+
+
+# GET /api/maps/<map_id>/task-history — Herkese açık.
+# Neden reverse? Dosyada kronolojik append (eski→yeni); liste en yeniyi üstte ister.
+@app.route('/api/maps/<map_id>/task-history', methods=['GET'])
+def get_map_task_history(map_id):
+    data, error = _read_map_data_file(map_id, "task_history.json")
+    if error:
+        return error
+    return jsonify(list(reversed(data)))
+
+
+# POST /api/maps/<map_id>/task-history — PIN yok: operatör paneli fire-and-forget loglar.
+# Neden ayrı endpoint? Nav durum makinesine bağlanmadan denetim izi tutmak için.
+@app.route('/api/maps/<map_id>/task-history', methods=['POST'])
+def add_map_task_history(map_id):
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Expected JSON body"}), 400
+
+    task_name = payload.get("taskName")
+    status = payload.get("status")
+    if not isinstance(task_name, str) or not task_name.strip():
+        return jsonify({"error": "Expected taskName string"}), 400
+    if status not in TASK_HISTORY_STATUSES:
+        return jsonify({
+            "error": "Expected status one of: başlatıldı, başarılı, iptal edildi, başarısız",
+        }), 400
+
+    timestamp = payload.get("timestamp")
+    if not isinstance(timestamp, str) or not timestamp.strip():
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    data, error = _read_map_data_file(map_id, "task_history.json")
+    if error:
+        return error
+
+    entry = {
+        "taskName": task_name.strip(),
+        "status": status,
+        "timestamp": timestamp.strip(),
+    }
+    data.append(entry)
+    # Ring buffer: sonsuz büyüyen geçmiş dosyasını önlemek için
+    if len(data) > TASK_HISTORY_MAX:
+        data = data[-TASK_HISTORY_MAX:]
+
+    _write_json_file(_map_data_file(map_id, "task_history.json"), data)
+    return jsonify(entry), 201
+
+
 # GET /api/maps/<map_id>/boundary — Herkese açık. Operatör + mühendis paneli.
 # Geofence poligonunu döner; sınır çizilmemişse null (operatör hedef kontrolünde sınır atlanır).
 @app.route('/api/maps/<map_id>/boundary', methods=['GET'])
@@ -717,6 +809,70 @@ def delete_map_forbidden_zone(map_id, zone_id):
 
     _write_json_file(_map_data_file(map_id, "forbidden_zones.json"), next_data)
     return jsonify({"ok": True})
+
+
+def generate_camera_frames(cap):
+    """
+    Açık VideoCapture'tan MJPEG multipart kare üretir; bitince cap.release().
+    Neden MJPEG? Tarayıcı <img> RTSP oynatamaz; multipart JPEG her kareyi gösterebilir.
+    """
+    try:
+        while True:
+            success, frame = cap.read()
+            if not success:
+                break
+            ret, buffer = cv2.imencode('.jpg', frame)
+            if not ret:
+                continue
+            frame_bytes = buffer.tobytes()
+            yield (
+                b'--frame\r\n'
+                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n'
+            )
+    finally:
+        cap.release()
+
+
+def is_rtsp_reachable(rtsp_url, timeout=2):
+    """
+    TCP host:port hızlı erişim testi.
+    Neden? cv2.VideoCapture kapalı kamerada onlarca sn asılı kalabiliyor;
+    2 sn socket ile erken 503 → frontend onError, sekme 'yükleniyor'da kilitlenmesin.
+    """
+    try:
+        parsed = urlparse(rtsp_url)
+        host = parsed.hostname
+        if not host:
+            return False
+        port = parsed.port or 554
+        sock = socket.create_connection((host, port), timeout=timeout)
+        sock.close()
+        return True
+    except Exception:
+        return False
+
+
+# GET /api/camera/stream — RTSP → MJPEG.
+# Neden bu endpoint? Operatör/mühendis paneli <img> ile canlı izler; native RTSP yok.
+# 503 zorunlu: boş generator tarayıcıyı sonsuza bekletirdi; onError tetiklensin.
+@app.route('/api/camera/stream')
+def camera_stream():
+    if not CAMERA_RTSP_URL:
+        return jsonify({"error": "Kamera yapilandirilmamis"}), 503
+
+    # OpenCV öncesi ucuz başarısızlık — uzun VideoCapture timeout'unu atla
+    if not is_rtsp_reachable(CAMERA_RTSP_URL):
+        return jsonify({"error": "Kameraya baglanilamadi (erisilemiyor)"}), 503
+
+    cap = cv2.VideoCapture(CAMERA_RTSP_URL)
+    if not cap.isOpened():
+        cap.release()
+        return jsonify({"error": "Kameraya baglanilamadi"}), 503
+
+    return Response(
+        generate_camera_frames(cap),
+        mimetype='multipart/x-mixed-replace; boundary=frame',
+    )
 
 
 if __name__ == '__main__':

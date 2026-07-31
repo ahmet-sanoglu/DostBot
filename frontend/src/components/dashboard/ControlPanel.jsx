@@ -6,7 +6,8 @@
 // sıralama stabil (pinned önce, grup içi mevcut sıra) — her tıkta liste zıplamasın.
 // PUT ile tasks.json'a yazılır; ayrı favori store yok (harita değişince pin kaybolmasın).
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigation } from '../../context/NavigationContext';
 import { INVALID_GOAL_MESSAGE } from '../../utils/mapPassability';
 import { updateMapTask } from '../../utils/mapApi';
 import Joystick from '../Joystick';
@@ -59,13 +60,37 @@ export default function ControlPanel({
   showInvalidGoalPopup,
   onCloseInvalidGoalPopup,
 }) {
+  const { previewTask, setPreviewTask } = useNavigation();
   const [tillConfirmTask, setTillConfirmTask] = useState(null);
   const [pinningId, setPinningId] = useState(null);
+  // Çift tıklamada iki startTask üst üste binmesin
+  const [startLocked, setStartLocked] = useState(false);
+  const startCooldownRef = useRef(null);
 
   const sortedTasks = useMemo(() => sortTasksByPinned(tasks), [tasks]);
 
+  useEffect(() => () => {
+    if (startCooldownRef.current) {
+      window.clearTimeout(startCooldownRef.current);
+    }
+  }, []);
+
+  // Navigasyon aktifken önizleme kapalı kalsın (çift rota karışmasın)
+  useEffect(() => {
+    if (queueBusy) {
+      setPreviewTask(null);
+    }
+  }, [queueBusy, setPreviewTask]);
+
   // Sıra bilinçli: geofence fail → invalid popup; geçince till varsa ikinci onay; yoksa direkt start
   const handleStartTask = (task) => {
+    if (startLocked) return;
+    setStartLocked(true);
+    startCooldownRef.current = window.setTimeout(() => {
+      setStartLocked(false);
+      startCooldownRef.current = null;
+    }, 1000);
+
     if (!onValidateTask(task)) return;
 
     if (taskHasTillAction(task)) {
@@ -74,6 +99,13 @@ export default function ControlPanel({
     }
 
     onStartTask(task);
+  };
+
+  const handleTogglePreview = (task) => {
+    if (queueBusy) return;
+    setPreviewTask((prev) => (
+      prev && prev.id === task.id ? null : task
+    ));
   };
 
   const handleConfirmTillStart = () => {
@@ -149,13 +181,38 @@ export default function ControlPanel({
               const stepCount = Array.isArray(task.steps) ? task.steps.length : 0;
               const canStart = mapReady && stepCount > 0 && !queueBusy;
               const isPinned = Boolean(task.pinned);
+              const isPreview = Boolean(previewTask && previewTask.id === task.id);
+              const canPreview = !queueBusy && stepCount > 0;
 
               return (
-                <li key={task.id || task.name} className={`task-card${isPinned ? ' task-card--pinned' : ''}`}>
+                <li
+                  key={task.id || task.name}
+                  className={[
+                    'task-card',
+                    isPinned ? 'task-card--pinned' : '',
+                    isPreview ? 'task-card--preview' : '',
+                    canPreview ? 'task-card--previewable' : '',
+                  ].filter(Boolean).join(' ')}
+                  onClick={() => handleTogglePreview(task)}
+                  role={canPreview ? 'button' : undefined}
+                  tabIndex={canPreview ? 0 : undefined}
+                  onKeyDown={(event) => {
+                    if (!canPreview) return;
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      handleTogglePreview(task);
+                    }
+                  }}
+                  aria-pressed={canPreview ? isPreview : undefined}
+                  title={canPreview ? (isPreview ? 'Rota önizlemesini kapat' : 'Rotayı haritada önizle') : undefined}
+                >
                   <button
                     type="button"
                     className={`task-card__pin${isPinned ? ' task-card__pin--active' : ''}`}
-                    onClick={() => handleTogglePin(task)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleTogglePin(task);
+                    }}
                     disabled={pinningId === task.id}
                     aria-label={isPinned ? 'Sabitlemeyi kaldır' : 'Görevi sabitle'}
                     aria-pressed={isPinned}
@@ -172,9 +229,12 @@ export default function ControlPanel({
                   </div>
                   <button
                     type="button"
-                    className="autonomous-btn autonomous-btn--small"
-                    onClick={() => handleStartTask(task)}
-                    disabled={!canStart}
+                    className={`autonomous-btn autonomous-btn--small${startLocked ? ' autonomous-btn--cooldown' : ''}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleStartTask(task);
+                    }}
+                    disabled={!canStart || startLocked}
                   >
                     Başlat
                   </button>

@@ -71,39 +71,51 @@ python3 ros_nodes/nav_relay.py
 
 ## TurtleBot3 Simulasyon Test Sureci
 
-Asagidaki sira kritiktir. Ozellikle **SLAM kapandiktan sonra map_server** adimi atlanirsa Nav2 costmap `/map` alamaz ve tum hedefler **ABORTED (status 6)** ile reddedilir.
+Asagidaki sira kritiktir. SLAM ile haritalama bittikten sonra **SLAM kapatilip** lokalizasyon (`map_server` + **AMCL**) baslatilmali; aksi halde Nav2 robotun haritadaki yerini bilmez / `/map` alamaz ve hedefler **ABORTED (status 6)** ile reddedilir.
+
+### Hizli baslatma (onerilen)
+
+Tum terminalleri dogru sirayla acmak icin:
+
+```bash
+~/start_agrifleet_sim.sh
+```
+
+Script Gazebo, lokalizasyon, Nav2, rosbridge, nav_relay, backend ve frontend'i ayri terminallerde otomatik acar. Elle adim adim kurulum asagidadir.
+
+### Elle adim adim
 
 1. **Gazebo** — TurtleBot3 simulasyonunu baslat (ornek: `turtlebot3_gazebo` world).
 2. **SLAM ile haritalama** — Ortami gezerek haritayi olustur; bitince haritayi diske kaydet (`map.yaml` + `map.pgm`/`map.png`).
 3. **SLAM'i kapat** — Haritalama bittiyse SLAM dugumunu durdur. Ayni anda hem SLAM hem map_server `/map` yayinlamamali.
-4. **map_server ile haritayi yukle** — Kaydedilen YAML'i `map_server` uzerinden yayinla; **haritayi saglayan tek kaynak bu olmali**.
-5. **Nav2** — Navigasyon stack'ini baslat (`use_sim_time:=True` ile). Costmap `/map`'i map_server'dan bekler.
-6. **rosbridge** — `ros2 launch rosbridge_server rosbridge_websocket_launch.xml`
-7. **nav_relay** — `python3 ros_nodes/nav_relay.py` (NavigateToPose ActionClient; UI topic'leri)
-8. **Backend / Frontend** — Flask `:5000`, Vite `npm run dev` (`:5173`). Muhendis panelinden ilgili `imageDir` haritasini ekle/aktive et.
-
-### Uyari: SLAM sonrasi map_server zorunlu
-
-SLAM ile haritalama bittikten sonra SLAM kapatilip **map_server** baslatilmali ve `/map` topic'inin tek kaynagi o olmali.
-
-- SLAM acik kalirsa veya map_server hic baslamazsa Nav2 costmap guncel `/map` alamaz.
-- Sonuc: planlama basarisiz, hedefler **ABORTED (status 6)**; UI'da gorevler de reddedilir / tamamlanmaz.
-- Web paneli harita PNG'sini Flask'tan gosterir; bu, Nav2'nin `/map`'ini **yerine gecmez**. Simulasyonda Nav2 icin ayri map_server sarti vardir.
-
-Haritalama bitince (SLAM kapatildiktan sonra), Nav2'nin haritayi almasi icin:
+4. **Lokalizasyon (map_server + AMCL)** — Kaydedilen haritayi `nav2_bringup` `localization_launch.py` ile yukle (yalnizca map_server degil; AMCL birlikte gelir):
 
 ```bash
-# Haritalama bitince (SLAM kapatildiktan sonra), Nav2'nin haritayi almasi icin:
-ros2 run nav2_map_server map_server --ros-args -p yaml_filename:=<harita_yolu>/map.yaml -p use_sim_time:=True
-ros2 lifecycle set /map_server configure
-ros2 lifecycle set /map_server activate
+ros2 launch nav2_bringup localization_launch.py \
+  map:=<harita_yolu>/map.yaml \
+  use_sim_time:=True
 ```
 
 `<harita_yolu>` ornegi: `/home/ahmet/AgriFleet/turtlebot3_sim_map`
 
+5. **Baslangic pozu (`/initialpose`)** — AMCL robotun haritadaki yerini bilmeden Nav2 hedef kabul etmez. RViz'de **2D Pose Estimate** ile robotun yaklasik konum/yonunu verin; veya `/initialpose` topic'ine `geometry_msgs/PoseWithCovarianceStamped` yayinlayin. Laser tarama harita duvarlariyla cakisiyorsa poz yeterince iyidir.
+6. **Nav2** — Navigasyon stack'ini baslat (`use_sim_time:=True` ile). Costmap `/map`'i lokalizasyondan bekler.
+7. **rosbridge** — `ros2 launch rosbridge_server rosbridge_websocket_launch.xml`
+8. **nav_relay** — `python3 ros_nodes/nav_relay.py` (NavigateToPose ActionClient; UI topic'leri)
+9. **Backend / Frontend** — Flask `:5000`, Vite `npm run dev` (`:5173`). Muhendis panelinden ilgili `imageDir` haritasini ekle/aktive et.
+
+### Uyari: SLAM sonrasi lokalizasyon zorunlu
+
+SLAM ile haritalama bittikten sonra SLAM kapatilip **`localization_launch.py`** (map_server + AMCL) baslatilmali; ardindan **`/initialpose`** verilmeli.
+
+- SLAM acik kalirsa veya lokalizasyon hic baslamazsa Nav2 costmap / poz tahmini guvenilir olmaz.
+- `initialpose` verilmezse AMCL baslatilmaz; hedefler reddedilir veya sapar.
+- Sonuc: planlama basarisiz, hedefler **ABORTED (status 6)**; UI'da gorevler de reddedilir / tamamlanmaz.
+- Web paneli harita PNG'sini Flask'tan gosterir; bu, Nav2'nin `/map`'ini **yerine gecmez**.
+
+Eski yaklasim (yalnizca `ros2 run nav2_map_server map_server` + lifecycle) yeterli degildir — AMCL ve `/initialpose` olmadan lokalizasyon tamamlanmaz. Tercih edilen yol: `localization_launch.py`.
+
 ## Acik Isler
 
-- Yasakli dikdortgen bolge yonetimi henuz eklenmedi
 - Nav2 parametre paneli planlandi, uygulanmadi
-- Coklu harita ekleme islevi henuz aktif degil
-- Tum testler bag ile yapildi, gercek robot testi bekliyor
+- Tum testler bag / simulasyon ile yapildi, gercek robot testi bekliyor

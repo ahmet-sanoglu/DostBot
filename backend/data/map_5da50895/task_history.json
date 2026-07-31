@@ -1,0 +1,137 @@
+[
+  {
+    "taskName": "deneme1",
+    "status": "başlatıldı",
+    "timestamp": "2026-07-31T10:34:11Z"
+  },
+  {
+    "taskName": "deneme1",
+    "status": "başarılı",
+    "timestamp": "2026-07-31T10:35:49Z"
+  },
+  {
+    "taskName": "Base Konumuna Git",
+    "status": "başlatıldı",
+    "timestamp": "2026-07-31T10:35:58Z"
+  },
+  {
+    "taskName": "Base Konumuna Git",
+    "status": "iptal edildi",
+    "timestamp": "2026-07-31T10:36:08Z"
+  },
+  {
+    "taskName": "Base Konumuna Git",
+    "status": "başlatıldı",
+    "timestamp": "2026-07-31T10:36:12Z"
+  },
+  {
+    "taskName": "Base Konumuna Git",
+    "status": "başarılı",
+    "timestamp": "2026-07-31T10:37:31Z"
+  },
+  {
+    "taskName": "TEST",
+    "status": "başlatıldı",
+    "timestamp": "2026-07-31T10:41:21Z"
+  },
+  {
+    "taskName": "TEST",
+    "status": "iptal edildi",
+    "timestamp": "2026-07-31T10:41:24Z"
+  },
+  {
+    "taskName": "TEST",
+    "status": "başlatıldı",
+    "timestamp": "2026-07-31T10:41:29Z"
+  },
+  {
+    "taskName": "TEST",
+    "status": "iptal edildi",
+    "timestamp": "2026-07-31T10:41:32Z"
+  },
+  {
+    "taskName": "TEST",
+    "status": "başlatıldı",
+    "timestamp": "2026-07-31T10:41:37Z"
+  },
+  {
+    "taskName": "TEST",
+    "status": "iptal edildi",
+    "timestamp": "2026-07-31T10:41:39Z"
+  },
+  {
+    "taskName": "TEST",
+    "status": "başlatıldı",
+    "timestamp": "2026-07-31T10:41:40Z"
+  },
+  {
+    "taskName": "TEST",
+    "status": "iptal edildi",
+    "timestamp": "2026-07-31T10:41:43Z"
+  },
+  {
+    "taskName": "Base Konumuna Git",
+    "status": "başlatıldı",
+    "timestamp": "2026-07-31T10:41:49Z"
+  },
+  {
+    "taskName": "Base Konumuna Git",
+    "status": "iptal edildi",
+    "timestamp": "2026-07-31T10:41:52Z"
+  },
+  {
+    "taskName": "Base Konumuna Git",
+    "status": "başlatıldı",
+    "timestamp": "2026-07-31T10:41:53Z"
+  },
+  {
+    "taskName": "Base Konumuna Git",
+    "status": "iptal edildi",
+    "timestamp": "2026-07-31T10:41:55Z"
+  },
+  {
+    "taskName": "Base Konumuna Git",
+    "status": "başlatıldı",
+    "timestamp": "2026-07-31T10:42:02Z"
+  },
+  {
+    "taskName": "Base Konumuna Git",
+    "status": "başarılı",
+    "timestamp": "2026-07-31T10:42:18Z"
+  },
+  {
+    "taskName": "Base Konumuna Git",
+    "status": "başlatıldı",
+    "timestamp": "2026-07-31T11:01:12Z"
+  },
+  {
+    "taskName": "Base Konumuna Git",
+    "status": "başarılı",
+    "timestamp": "2026-07-31T11:01:36Z"
+  },
+  {
+    "taskName": "TEST",
+    "status": "başlatıldı",
+    "timestamp": "2026-07-31T11:12:49Z"
+  },
+  {
+    "taskName": "TEST",
+    "status": "başlatıldı",
+    "timestamp": "2026-07-31T11:25:46Z"
+  },
+  {
+    "taskName": "TEST",
+    "status": "iptal edildi",
+    "timestamp": "2026-07-31T11:26:09Z"
+  },
+  {
+    "taskName": "Base Konumuna Git",
+    "status": "başlatıldı",
+    "timestamp": "2026-07-31T11:26:11Z"
+  },
+  {
+    "taskName": "Base Konumuna Git",
+    "status": "başarılı",
+    "timestamp": "2026-07-31T11:26:28Z"
+  }
+]

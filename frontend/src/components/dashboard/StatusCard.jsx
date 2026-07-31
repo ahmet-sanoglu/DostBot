@@ -12,6 +12,7 @@ export default function StatusCard({ activeMap, showMapName = true }) {
     lastSentGoal,
     queueBusy,
     emergencyStopped,
+    recoveryCount,
   } = useNavigation();
 
   return (
@@ -28,7 +29,15 @@ export default function StatusCard({ activeMap, showMapName = true }) {
         {emergencyStopped
           ? 'Durduruldu'
           : queueBusy
-            ? 'Meşgul — hedef işleniyor'
+            ? (
+              <>
+                Meşgul — hedef işleniyor
+                {/* ≥2 recoveries: Nav2 zorlanıyor; görev iptal değil, yalnızca uyarı rozeti */}
+                {recoveryCount >= 2 && (
+                  <span className="queue-badge__recovery"> ⚠️ Zorlanıyor</span>
+                )}
+              </>
+            )
             : 'Hazır — yeni hedef kabul edilir'}
       </div>
       {activeTaskProgress && (

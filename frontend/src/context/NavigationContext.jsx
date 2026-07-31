@@ -18,6 +18,7 @@ import {
   subscribeNavigationStatus,
 } from '../utils/rosNavigation';
 import { startCoverageTask } from '../utils/coverageAction';
+import { appendMapTaskHistory, fetchActiveMap } from '../utils/mapApi';
 
 /** accepted hiç gelmezse (röle yok / bag) kısa kaçış; UI sonsuza kadar meşgul kalmasın diye. */
 const NAV_BUSY_MS = 10000;
@@ -39,6 +40,11 @@ function formatEventTime(date = new Date()) {
     minute: '2-digit',
     hour12: false,
   });
+}
+
+/** Backend task-history ISO zaman damgası (saniye hassasiyeti). */
+function historyTimestamp(date = new Date()) {
+  return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
 /** Durum kartında gösterilecek metni bağlantı, acil dur, coverage ve görev ilerlemesine göre üretir. */
@@ -111,6 +117,13 @@ export function NavigationProvider({ children }) {
   const [emergencyStopped, setEmergencyStopped] = useState(false);
   const [coverageStatus, setCoverageStatus] = useState(null);
   const [navDistanceRemaining, setNavDistanceRemaining] = useState(null);
+  // MapView geçmiş izini temizlemek için — startTask/sendNavigationGoal'ta artar
+  const [mapTrailResetKey, setMapTrailResetKey] = useState(0);
+  // Kontrol Paneli kart tıklaması — haritada rota önizlemesi (navigasyon değil)
+  const [previewTask, setPreviewTask] = useState(null);
+  // Nav2 number_of_recoveries — engelde kurtarma manevrası sayacı.
+  // Neden UI'ye? Görev iptal edilmez ama operatör "takıldı mı?" görsün (StatusCard / Son Olaylar).
+  const [recoveryCount, setRecoveryCount] = useState(0);
 
   const estopResetTimerRef = useRef(null);
   const busyTimerRef = useRef(null);  // NAV_BUSY_MS yedek; result/rejected gelince clearTimeout
@@ -124,6 +137,15 @@ export function NavigationProvider({ children }) {
   const pendingStepsRef = useRef([]);
   const activeTaskRef = useRef(null);
   const proceedAfterStepActionRef = useRef(null);
+  // Kurtarma uyarısı Son Olaylar'a bir kez — her feedback spam olmasın
+  const recoveryWarnedRef = useRef(false);
+  // Görev geçmişi: nav state makinesine paralel yan log (await yok → UI bloklanmaz)
+  const historyMapIdRef = useRef(null);
+  // Çok adımlı görevde her accepted'ta "başlatıldı" yazılmasın
+  const historyStartLoggedRef = useRef(false);
+  // Acil dur zaten iptal kaydı yazdıysa CANCELED result çift satır üretmesin
+  const historySkipNextCancelRef = useRef(false);
+  const lastSentGoalRef = useRef(null);
 
   const isConnected = status === ROS_CONNECTED_STATUS;
 
@@ -134,6 +156,11 @@ export function NavigationProvider({ children }) {
       window.clearTimeout(busyTimerRef.current);
       busyTimerRef.current = null;
     }
+  }, []);
+
+  const resetRecoveryState = useCallback(() => {
+    setRecoveryCount(0);
+    recoveryWarnedRef.current = false;
   }, []);
 
   const startBusyTimer = useCallback((timeoutMs) => {
@@ -156,20 +183,62 @@ export function NavigationProvider({ children }) {
     setRecentEvents((prev) => [entry, ...prev].slice(0, MAX_EVENTS));
   }, []);
 
+  /** Aktif görev veya son hedef etiketinden geçmiş kaydı için isim. */
+  const resolveHistoryTaskName = useCallback(() => {
+    const active = activeTaskRef.current;
+    if (active?.taskName) return active.taskName;
+    const source = lastSentGoalRef.current?.source;
+    if (typeof source === 'string' && source.trim()) {
+      const match = source.match(/^Görev:\s*(.+?)(?:\s*-\s*Adım\s+\d|$)/);
+      return match ? match[1].trim() : source;
+    }
+    return 'Hedef';
+  }, []);
+
+  /**
+   * Görev geçmişi POST — fire-and-forget.
+   * Neden ayrı? Nav accepted/result akışını bozmadan denetim izi; hata olursa
+   * yalnızca console.warn, queueBusy/step zinciri etkilenmez.
+   */
+  const logTaskHistory = useCallback((status, taskName) => {
+    const name = (taskName && String(taskName).trim()) || resolveHistoryTaskName();
+    void (async () => {
+      try {
+        let mapId = historyMapIdRef.current;
+        if (!mapId) {
+          const map = await fetchActiveMap();
+          mapId = map?.id;
+          if (mapId) historyMapIdRef.current = mapId;
+        }
+        if (!mapId) return;
+        await appendMapTaskHistory(mapId, {
+          taskName: name,
+          status,
+          timestamp: historyTimestamp(),
+        });
+      } catch (err) {
+        console.warn('[taskHistory] kayıt gönderilemedi:', err);
+      }
+    })();
+  }, [resolveHistoryTaskName]);
+
   const dispatchGoal = useCallback((goal, sourceLabel) => {
     const sent = publishNavigationGoal(ros, goal);
     if (!sent) return false;
 
     clearPlanPath();
-    setLastSentGoal({ ...goal, source: sourceLabel });
+    const sentGoal = { ...goal, source: sourceLabel };
+    lastSentGoalRef.current = sentGoal;
+    setLastSentGoal(sentGoal);
     setNavDistanceRemaining(null);
+    resetRecoveryState();
     // Katman 1: kısa fallback. Röle hiç çalışmıyorsa / accepted gelmiyorsa bag testinde çıkış yolu bu.
     // accepted gelirse bu 10 sn timer uzun güvenlik ağıyla değiştirilecek.
     setQueueBusy(true);
     startBusyTimer(NAV_BUSY_MS);
 
     return true;
-  }, [clearPlanPath, ros, startBusyTimer]);
+  }, [clearPlanPath, resetRecoveryState, ros, startBusyTimer]);
 
   const sendNavigationGoal = useCallback((goal, sourceLabel) => {
     if (queueBusy || pendingStepsRef.current.length > 0 || activeTaskRef.current) {
@@ -177,9 +246,13 @@ export function NavigationProvider({ children }) {
       return false;
     }
 
+    // Yeni hedef: eski görev izi/rotası haritada kalmasın
+    setMapTrailResetKey((key) => key + 1);
+    setPreviewTask(null);
     activeTaskRef.current = null;
     setActiveTaskProgress(null);
     pendingStepsRef.current = [];
+    historyStartLoggedRef.current = false;
 
     const sent = dispatchGoal(goal, sourceLabel);
     if (sent) {
@@ -189,17 +262,29 @@ export function NavigationProvider({ children }) {
   }, [addEvent, dispatchGoal, queueBusy]);
 
   const emergencyStopNavigation = useCallback(() => {
+    // İptal kaydı — state temizlenmeden önce isim alınır (yan log; nav akışını değiştirmez)
+    const hadWork = Boolean(activeTaskRef.current) || queueBusyRef.current;
+    const stopName = resolveHistoryTaskName();
+
     cancelActiveNavigationGoal(ros);
 
     clearBusyTimer();
     pendingStepsRef.current = [];
     activeTaskRef.current = null;
     setActiveTaskProgress(null);
+    setPreviewTask(null);
     setCoverageStatus(null);
     setNavDistanceRemaining(null);
     skipNextIdleEventRef.current = false;
     inStepActionRef.current = false;
+    historyStartLoggedRef.current = false;
+    resetRecoveryState();
     clearPlanPath();
+
+    if (hadWork) {
+      historySkipNextCancelRef.current = true;
+      logTaskHistory('iptal edildi', stopName);
+    }
 
     if (estopResetTimerRef.current) {
       window.clearTimeout(estopResetTimerRef.current);
@@ -213,7 +298,7 @@ export function NavigationProvider({ children }) {
       setEmergencyStopped(false);
       estopResetTimerRef.current = null;
     }, 4000);
-  }, [clearBusyTimer, clearPlanPath, ros]);
+  }, [clearBusyTimer, clearPlanPath, logTaskHistory, resetRecoveryState, resolveHistoryTaskName, ros]);
 
   /** Step eylemi bittikten sonra kuyruktaki bir sonraki navigasyon hedefini gönderir veya görevi kapatır. */
   const proceedAfterStepAction = useCallback(() => {
@@ -240,12 +325,14 @@ export function NavigationProvider({ children }) {
     }
 
     addEvent(`${activeTask.taskName} tamamlandı`);
+    logTaskHistory('başarılı', activeTask.taskName);
+    historyStartLoggedRef.current = false;
     activeTaskRef.current = null;
     setActiveTaskProgress(null);
     pendingStepsRef.current = [];
     setQueueBusy(false);
     skipNextIdleEventRef.current = true;
-  }, [addEvent, dispatchGoal]);
+  }, [addEvent, dispatchGoal, logTaskHistory]);
 
   proceedAfterStepActionRef.current = proceedAfterStepAction;
 
@@ -331,6 +418,11 @@ export function NavigationProvider({ children }) {
     const steps = normalizeTaskSteps(task);
     if (steps.length === 0) return false;
 
+    // Önceki görevin kırmızı izi birikmesin; gelecek rota activeTaskProgress ile yenilenir
+    setMapTrailResetKey((key) => key + 1);
+    setPreviewTask(null); // gerçek navigasyon başlarken önizleme kapansın
+    historyStartLoggedRef.current = false;
+
     const progress = {
       taskName: task.name || 'Görev',
       currentStep: 1,
@@ -371,6 +463,11 @@ export function NavigationProvider({ children }) {
         // 10 sn fallback erken "Hazır" üretmemeli; onun yerine yalnızca robot tamamen takılırsa
         // devreye girecek 120 sn uzun güvenlik ağına geçilir.
         startBusyTimer(NAV_ACCEPTED_SAFETY_MS);
+        // Yan kayıt: görev başına bir kez "başlatıldı" (çok adımlı görevlerde spam olmasın)
+        if (!historyStartLoggedRef.current) {
+          historyStartLoggedRef.current = true;
+          logTaskHistory('başlatıldı');
+        }
         return;
       }
 
@@ -378,18 +475,32 @@ export function NavigationProvider({ children }) {
         if (typeof message.distance_remaining === 'number') {
           setNavDistanceRemaining(message.distance_remaining);
         }
+        if (typeof message.number_of_recoveries === 'number') {
+          const count = message.number_of_recoveries;
+          setRecoveryCount(count);
+          // ≥2: Nav2 ciddi engel/kurtarma — görev devam eder, sadece uyarı
+          // recoveryWarnedRef: aynı görevde tekrarlayan feedback spam'ini keser
+          if (count >= 2 && !recoveryWarnedRef.current) {
+            recoveryWarnedRef.current = true;
+            addEvent('⚠️ Robot zorlanıyor, alternatif yol deneniyor');
+          }
+        }
         return;
       }
 
       if (message.type === 'rejected') {
         console.warn('[navStatus] rejected');
+        const rejectedName = resolveHistoryTaskName();
         clearBusyTimer();
         setNavDistanceRemaining(null);
+        resetRecoveryState();
         pendingStepsRef.current = [];
         activeTaskRef.current = null;
         setActiveTaskProgress(null);
         skipNextIdleEventRef.current = true;
+        historyStartLoggedRef.current = false;
         addEvent('Hedef reddedildi');
+        logTaskHistory('başarısız', rejectedName);
         setQueueBusy(false);
         return;
       }
@@ -402,6 +513,23 @@ export function NavigationProvider({ children }) {
         console.log('[navStatus] result status:', resultStatus);
         clearBusyTimer();
         setNavDistanceRemaining(null);
+        resetRecoveryState();
+
+        // Yan kayıt: terminal sonuçlar; çok adımlı görevde SUCCEEDED → proceedAfterStepAction'da
+        if (resultStatus === NAV_RESULT_CANCELED) {
+          if (historySkipNextCancelRef.current) {
+            historySkipNextCancelRef.current = false;
+          } else {
+            logTaskHistory('iptal edildi');
+          }
+          historyStartLoggedRef.current = false;
+        } else if (resultStatus === NAV_RESULT_ABORTED) {
+          logTaskHistory('başarısız');
+          historyStartLoggedRef.current = false;
+        } else if (resultStatus === NAV_RESULT_SUCCEEDED && !activeTaskRef.current) {
+          logTaskHistory('başarılı');
+          historyStartLoggedRef.current = false;
+        }
 
         // 4=SUCCEEDED, 5=CANCELED, 6=ABORTED — hepsi meşguliyeti kapatır; zincir effect'e bırakılır
         if (
@@ -413,7 +541,16 @@ export function NavigationProvider({ children }) {
         }
       }
     });
-  }, [addEvent, clearBusyTimer, isConnected, ros, startBusyTimer]);
+  }, [
+    addEvent,
+    clearBusyTimer,
+    isConnected,
+    logTaskHistory,
+    resetRecoveryState,
+    resolveHistoryTaskName,
+    ros,
+    startBusyTimer,
+  ]);
 
   // queueBusy false: navigasyon bitti → ulaşılan step'in eylemi → eylem bitince sıradaki step veya görev sonu
   useEffect(() => {
@@ -506,6 +643,10 @@ export function NavigationProvider({ children }) {
       emergencyStopped,
       activeTaskProgress,
       activeTaskRemainingSteps,
+      mapTrailResetKey,
+      previewTask,
+      setPreviewTask,
+      recoveryCount,
       recentEvents,
       statusText,
       isConnected,
@@ -520,6 +661,9 @@ export function NavigationProvider({ children }) {
       emergencyStopped,
       activeTaskProgress,
       activeTaskRemainingSteps,
+      mapTrailResetKey,
+      previewTask,
+      recoveryCount,
       recentEvents,
       statusText,
       isConnected,

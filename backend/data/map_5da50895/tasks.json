@@ -169,5 +169,20 @@
       }
     ],
     "pinned": false
+  },
+  {
+    "id": "task_e66e71fb",
+    "name": "uyarı",
+    "steps": [
+      {
+        "x": 2.03,
+        "y": 0.85,
+        "yaw": 0.0,
+        "action": {
+          "type": "wait"
+        }
+      }
+    ],
+    "pinned": false
   }
 ]

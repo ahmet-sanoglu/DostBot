@@ -28,6 +28,26 @@ export async function fetchMapTasks(mapId) {
   return fetchJson(`${API_BASE}/api/maps/${encodeURIComponent(mapId)}/tasks`);
 }
 
+/** Görev geçmişi — modal listesi; backend zaten yeni→eski sıralar. */
+export async function fetchMapTaskHistory(mapId) {
+  return fetchJson(`${API_BASE}/api/maps/${encodeURIComponent(mapId)}/task-history`);
+}
+
+/**
+ * Navigasyon yan kaydı POST — accepted/result sonrası.
+ * Neden mapApi'de? NavigationContext await etmeden çağırır; nav state'e karışmaz.
+ */
+export async function appendMapTaskHistory(mapId, entry) {
+  return fetchJson(
+    `${API_BASE}/api/maps/${encodeURIComponent(mapId)}/task-history`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(entry),
+    },
+  );
+}
+
 /**
  * Görev güncelleme (PUT) — operatör pin toggle için (PIN yok, içerik aynı kalmalı).
  * Mühendis tam düzenleme adminApi.updateMapTask + PIN kullanır.

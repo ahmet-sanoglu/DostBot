@@ -402,6 +402,57 @@ function drawUpcomingRoute(ctx, remainingSteps, robotPose, mapMeta, imageObj, im
   );
 }
 
+/**
+ * Görev kartı önizlemesi — yalnızca adımlar arası (robot konumu yok).
+ * Çok adım: yeşil nokta zinciri. Tek adım: görünür işaretçi (trail noktası tek başına kaybolur).
+ */
+function drawPreviewTaskRoute(ctx, taskSteps, mapMeta, imageObj, imageData, scale) {
+  if (!mapMeta || !imageObj) return;
+  if (!Array.isArray(taskSteps) || taskSteps.length === 0) return;
+
+  const waypoints = [];
+  for (const step of taskSteps) {
+    const x = typeof step?.x === 'number' ? step.x : parseFloat(step?.x);
+    const y = typeof step?.y === 'number' ? step.y : parseFloat(step?.y);
+    if (Number.isNaN(x) || Number.isNaN(y)) continue;
+    waypoints.push({ x, y });
+  }
+  if (waypoints.length === 0) return;
+
+  // 2+: rota örneklemesi; 1 nokta için trail tek mikro-nokta olur, ayrı işaretçi şart
+  if (waypoints.length >= 2) {
+    const trail = samplePolylineTrail(waypoints);
+    drawTrailDots(
+      ctx,
+      trail,
+      mapMeta,
+      imageObj,
+      imageData,
+      scale,
+      'rgba(6, 168, 155, 0.35)',
+    );
+  }
+
+  // Her adım konumunu belirgin daire ile göster (tek adımda tek görünür ipucu bu)
+  const markerRadius = 5 / scale;
+  waypoints.forEach((point) => {
+    const { x, y } = worldToDisplayPixel(
+      point.x,
+      point.y,
+      mapMeta,
+      imageObj,
+      imageData,
+    );
+    ctx.beginPath();
+    ctx.arc(x, y, markerRadius, 0, 2 * Math.PI);
+    ctx.fillStyle = 'rgba(6, 168, 155, 0.85)';
+    ctx.fill();
+    ctx.strokeStyle = '#025539';
+    ctx.lineWidth = 1.5 / scale;
+    ctx.stroke();
+  });
+}
+
 /** Geçmiş iz (kırmızı) — odometri birikimi; drawUpcomingRoute ile aynı drawTrailDots. */
 function drawPositionTrail(ctx, trail, mapMeta, imageObj, imageData, scale) {
   drawTrailDots(
@@ -433,7 +484,7 @@ const MapView = () => {
   const smoothedPoseRef = useRef(null);
   const { setPose: setTelemetryPose } = useTelemetry();
   const { ros, status: rosStatus } = useRos();
-  const { activeTaskRemainingSteps } = useNavigation();
+  const { activeTaskRemainingSteps, mapTrailResetKey, previewTask, queueBusy } = useNavigation();
 
   // Zoom ve pan durumu
   const [scale, setScale] = useState(1);
@@ -538,6 +589,12 @@ const MapView = () => {
     }
   }, [robotPose, setTelemetryPose]);
 
+  // startTask / sendNavigationGoal → eski görevin kırmızı izi temizlensin
+  useEffect(() => {
+    if (mapTrailResetKey === 0) return;
+    setPositionTrail([]);
+  }, [mapTrailResetKey]);
+
   // ── 4. ResizeObserver: container boyutu değişince canvas'ı güncelle ──
   useEffect(() => {
     const container = containerRef.current;
@@ -608,11 +665,23 @@ const MapView = () => {
     }
 
     // Kalan görev adımları — kırmızı geçmiş izle aynı nokta tekniği, yeşil
-    if (mapMeta && robotPose) {
+    if (mapMeta && robotPose && queueBusy) {
       drawUpcomingRoute(
         ctx,
         activeTaskRemainingSteps,
         robotPose,
+        mapMeta,
+        imageObj,
+        mapImageDataRef.current,
+        totalScale,
+      );
+    }
+
+    // Kart tıklaması önizlemesi — navigasyon yokken; robot→değil, adımlar arası
+    if (mapMeta && !queueBusy && previewTask) {
+      drawPreviewTaskRoute(
+        ctx,
+        previewTask.steps,
         mapMeta,
         imageObj,
         mapImageDataRef.current,
@@ -640,6 +709,8 @@ const MapView = () => {
     scale,
     offset,
     activeTaskRemainingSteps,
+    previewTask,
+    queueBusy,
   ]);
 
   const scaleRef = useRef(scale);

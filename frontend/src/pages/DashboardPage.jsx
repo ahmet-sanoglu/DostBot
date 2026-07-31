@@ -1,16 +1,18 @@
-// Operatör Kontrol Paneli ana sayfası — sol harita, sağ kontrol kartları.
+// Operatör Kontrol Paneli ana sayfası — birincil kamera + PiP harita, sağ kontrol kartları.
 // Görev başlatmadan önce isWorldGoalPassable ile hedef doğrulanır.
 
 import React, { useCallback, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import CameraFeed from '../components/CameraFeed';
 import MapView from '../components/MapView';
 import ControlPanel from '../components/dashboard/ControlPanel';
+import MapPipWindow from '../components/dashboard/MapPipWindow';
 import TelemetryPanel from '../components/dashboard/TelemetryPanel';
 import { useActiveMap } from '../hooks/useActiveMap';
 import { useMapOccupancy } from '../hooks/useMapOccupancy';
 import { useNavigation } from '../context/NavigationContext';
 
-/** Kontrol Paneli (/) — harita + görev/joystick paneli bir arada. */
+/** Kontrol Paneli (/) — kamera sahnesi + görev/joystick paneli. */
 export default function DashboardPage() {
   const [searchParams] = useSearchParams();
   const showDebugTelemetry = searchParams.get('debug') === '1';
@@ -65,10 +67,15 @@ export default function DashboardPage() {
 
   return (
     <div className={`main-content${showDebugTelemetry ? ' main-content--debug' : ''}`}>
-      <div className="map-column">
-        <div className="map-panel">
-          <MapView />
+      <div className="map-column camera-stage">
+        <div className="camera-primary">
+          <CameraFeed className="camera-primary__feed" />
         </div>
+        <MapPipWindow>
+          <div className="map-panel map-panel--pip">
+            <MapView />
+          </div>
+        </MapPipWindow>
       </div>
 
       <ControlPanel
