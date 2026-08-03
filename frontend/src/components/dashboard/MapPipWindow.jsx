@@ -7,8 +7,8 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
-const PIP_DEFAULT_WIDTH = 220;
-const PIP_DEFAULT_HEIGHT = 160;
+const PIP_DEFAULT_WIDTH = 280;
+const PIP_DEFAULT_HEIGHT = 200;
 const PIP_MIN_WIDTH = 150;
 const PIP_MIN_HEIGHT = 110;
 const PIP_MARGIN = 12;

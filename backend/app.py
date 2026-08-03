@@ -1,6 +1,10 @@
 # AgriFleet web arayüzünün veri katmanı.
-# Robotla doğrudan konuşmaz; harita görüntüsü, görevler ve sınır bilgisini
-# JSON dosyalarından okur/yazar. Flask bu dosyayı "REST API sunucusu" olarak çalıştırır.
+# Robotla doğrudan konuşmaz; harita görüntüsü diskten, görev/sınır/yasak bölge
+# PostgreSQL'den okunur/yazılır. Flask bu dosyayı "REST API sunucusu" olarak çalıştırır.
+#
+# Neden JSON → PostgreSQL? Dosya yazımında yarış/yarım JSON ve eşzamanlı panel
+# yazımları riskliydi; DB transaction + CASCADE ilişkiler güvenilir kalıcılık sağlar.
+# API sözleşmesi (camelCase) aynı kaldı — frontend değişmeden satır→dict çevirisi burada.
 # Konumlar (locations) kaldırıldı — rota noktaları artık görev steps içinde tutulur;
 # ayrı locations.json /locationId senkronu yoktu, çift kaynak sapması ve UI karmaşası yaratıyordu.
 
@@ -8,19 +12,19 @@ import json
 import os
 import re
 import secrets
-import shutil
 import socket
-import tempfile
 import uuid
 from datetime import datetime, timezone
 from urllib.parse import urlparse
-from flask import Flask, Response, jsonify, request, send_from_directory
-from flask_cors import CORS
+
+import cv2
 import yaml
 from dotenv import load_dotenv
-import cv2
+from flask import Flask, Response, jsonify, request, send_from_directory
+from flask_cors import CORS
 
 from convert_map import convert_pgm_to_png
+from db import db_conn, execute  # ham SQL; ORM yok — mevcut jsonify şekli korunur
 
 # Ana sera haritası — silinemez; yanlışlıkla silinirse operatör/mühendis paneli veri kaybeder.
 PROTECTED_MAP_ID = "map_default"
@@ -42,64 +46,54 @@ CORS(
 
 # ROS'tan üretilen occupancy grid haritasının diskteki klasörü (PNG + YAML burada).
 MAP_DIR = os.getenv("MAP_DIRECTORY", os.path.expanduser("~/AgriFleet/agriculture_map1"))
-# Görev/sınır gibi kullanıcı tanımlı verilerin tutulduğu klasör (backend/data/).
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
-MAPS_FILE = os.path.join(DATA_DIR, "maps.json")
 # Harita kimliğinde sadece harf, rakam, tire ve alt çizgiye izin verilir (path injection önlemi).
 MAP_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 ADMIN_PIN = os.getenv("ADMIN_PIN", "")
 # RTSP kamera URL — boşsa /api/camera/stream 503; tarayıcı native RTSP oynatamadığı için MJPEG gerekir.
 CAMERA_RTSP_URL = os.getenv("CAMERA_RTSP_URL", "")
 
-
-def _read_json_file(path, default=None):
-    """Diskteki bir JSON dosyasını okur; dosya yoksa default değeri döner."""
-    if not os.path.exists(path):
-        return default
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+# Görev geçmişi — nav_relay/Nav2'dan bağımsız yan log; UI modalı okur.
+TASK_HISTORY_MAX = 200
+TASK_HISTORY_STATUSES = {"başlatıldı", "başarılı", "iptal edildi", "başarısız"}
 
 
-def _write_json_file(path, data):
-    """
-    Veriyi JSON olarak diske yazar; klasör yoksa önce oluşturur.
+def _fmt_ts(dt):
+    """DB TIMESTAMPTZ → API'nin beklediği Z-suffixed ISO (eski JSON damgası ile uyum)."""
+    if dt is None:
+        return None
+    if isinstance(dt, str):
+        return dt.strip()
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    Neden atomik (tmp + fsync + os.replace)?
-    Doğrudan hedefe "r+"/seek yazımında yeni içerik kısaysa eski baytlar kalır
-    (task_history.json sonunda fazladan ] gibi bozuk JSON).
-    Önce tmp'ye "w" (truncate) yazıp replace etmek: yarım yazım hedefi bozmaz,
-    kısa yeniden yazımda eski kuyruk kalmaz.
-    """
-    directory = os.path.dirname(path)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
 
-    # Aynı klasörde tmp — rename/replace aynı filesystem'de atomik olsun
-    fd, tmp_path = tempfile.mkstemp(
-        prefix=".tmp_",
-        suffix=".json",
-        dir=directory or None,
-    )
-    try:
-        # "w": truncate; "a"/"r+" yok — eski içerik birikmesin
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-            f.write("\n")
-            f.flush()
-            os.fsync(f.fileno())  # replace öncesi diske insin; crash'te yarım tmp kalsın, hedef bozulmasın
-        os.replace(tmp_path, path)
-    except Exception:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+def _parse_ts(raw):
+    """İstemciden gelen timestamp string'ini doğrular; geçersizse None."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    return raw.strip()
+
+
+def _map_row_to_api(row):
+    """snake_case satır → camelCase (imageDir/isActive); React tarafı sütun adı bilmez."""
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "imageDir": row["image_dir"],
+        "isActive": bool(row["is_active"]),
+        "createdAt": _fmt_ts(row["created_at"]),
+    }
 
 
 def _load_maps():
-    """maps.json içindeki tüm harita kayıtlarını liste olarak döner."""
-    maps = _read_json_file(MAPS_FILE, default=[])
-    return maps if isinstance(maps, list) else []
+    """Tüm harita kayıtlarını liste olarak döner."""
+    with db_conn() as conn:
+        result = execute(
+            conn,
+            "SELECT id, name, image_dir, is_active, created_at FROM maps ORDER BY created_at",
+        )
+        return [_map_row_to_api(row) for row in result.mappings().all()]
 
 
 def _validate_map_id(map_id):
@@ -109,30 +103,40 @@ def _validate_map_id(map_id):
     return True
 
 
-def _map_data_dir(map_id):
-    """Belirli bir haritaya ait alt veri klasörünün yolunu döner (örn. data/map_default/)."""
-    return os.path.join(DATA_DIR, map_id)
-
-
-def _map_data_file(map_id, filename):
-    """Harita klasörü içindeki tek bir dosyanın tam yolunu üretir (örn. tasks.json)."""
-    return os.path.join(_map_data_dir(map_id), filename)
-
-
 def _find_map(map_id):
-    """maps.json kayıtları arasında verilen kimliğe sahip haritayı arar."""
-    for entry in _load_maps():
-        if entry.get("id") == map_id:
-            return entry
-    return None
+    """Verilen kimliğe sahip harita kaydını arar."""
+    with db_conn() as conn:
+        result = execute(
+            conn,
+            "SELECT id, name, image_dir, is_active, created_at FROM maps WHERE id = :id",
+            {"id": map_id},
+        )
+        row = result.mappings().first()
+        return _map_row_to_api(row) if row else None
 
 
 def _get_active_map_entry():
-    """maps.json içinde isActive: true olan ilk harita kaydını döner."""
-    for entry in _load_maps():
-        if entry.get("isActive") is True:
-            return entry
-    return None
+    """is_active=true olan ilk harita kaydını döner."""
+    with db_conn() as conn:
+        result = execute(
+            conn,
+            "SELECT id, name, image_dir, is_active, created_at FROM maps WHERE is_active = TRUE LIMIT 1",
+        )
+        row = result.mappings().first()
+        return _map_row_to_api(row) if row else None
+
+
+def _require_map(map_id):
+    """
+    Harita kimliğini doğrular; yoksa (None, HTTP_yanıt_demeti) döner.
+    Görev/sınır endpoint'lerinde ortak 400/404 kontrolü.
+    """
+    if not _validate_map_id(map_id):
+        return None, (jsonify({"error": "Invalid map id"}), 400)
+    entry = _find_map(map_id)
+    if not entry:
+        return None, (jsonify({"error": "Map not found"}), 404)
+    return entry, None
 
 
 def _active_image_dir():
@@ -168,28 +172,6 @@ def _find_map_png(image_dir):
         if os.path.isfile(path):
             return path
     return None
-
-
-def _save_maps(maps):
-    """maps.json kaydını diske yazar."""
-    _write_json_file(MAPS_FILE, maps)
-
-
-def _read_map_data_file(map_id, filename):
-    """
-    Harita kimliğini doğrular, dosyayı okur ve liste formatında döner.
-    Hata durumunda (None, HTTP_yanıt_demeti) çifti döner; çağıran fonksiyon bunu kontrol eder.
-    """
-    if not _validate_map_id(map_id):
-        return None, (jsonify({"error": "Invalid map id"}), 400)
-    if not _find_map(map_id):
-        return None, (jsonify({"error": "Map not found"}), 404)
-
-    path = _map_data_file(map_id, filename)
-    data = _read_json_file(path, default=[])
-    if not isinstance(data, list):
-        return None, (jsonify({"error": f"Invalid {filename} format"}), 500)
-    return data, None
 
 
 def _verify_admin_pin():
@@ -269,7 +251,6 @@ def _normalize_task(raw):
         return None
 
     # pinned: Kontrol Paneli'nde sık görevleri üste sabitlemek için.
-    # Ayrı "favori" listesi tutmak yerine tasks.json'da kalır — harita değişince kaybolmaz.
     pinned = raw.get("pinned", False)
     if not isinstance(pinned, bool):
         pinned = bool(pinned)
@@ -285,18 +266,13 @@ def _normalize_task(raw):
     return task
 
 
-def _boundary_file(map_id):
-    """Geofence (izin verilen alan poligonu) dosyasının yolunu döner."""
-    return _map_data_file(map_id, "boundary.json")
-
-
 def _normalize_boundary_points(raw):
     """
     Geofence poligonu için gelen nokta listesini doğrular.
     Her nokta {x, y} içermeli; en az 3 nokta geofence oluşturmak için yeterlidir.
     """
     if isinstance(raw, dict):
-        raw = raw.get("points")  # {"points": [...]} veya doğrudan liste kabul edilir
+        raw = raw.get("points")
     if not isinstance(raw, list):
         return None
     points = []
@@ -307,6 +283,155 @@ def _normalize_boundary_points(raw):
         if isinstance(x, (int, float)) and isinstance(y, (int, float)):
             points.append({"x": float(x), "y": float(y)})
     return points
+
+
+def _jsonb_to_points(raw):
+    """JSONB sütununu liste olarak okur; sürücü string veya dict/list dönebilir."""
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+    if isinstance(raw, dict):
+        return raw.get("points")
+    return raw
+
+
+def _fetch_task_steps(conn, task_id):
+    """Görev adımlarını step_order sırasıyla API formatında döner."""
+    result = execute(
+        conn,
+        """
+        SELECT x, y, yaw, action_type
+        FROM task_steps
+        WHERE task_id = :task_id
+        ORDER BY step_order
+        """,
+        {"task_id": task_id},
+    )
+    steps = []
+    for row in result.mappings().all():
+        steps.append({
+            "x": float(row["x"]),
+            "y": float(row["y"]),
+            "yaw": float(row["yaw"]),
+            "action": {"type": row["action_type"] or "wait"},
+        })
+    return steps
+
+
+def _task_row_to_api(row, steps):
+    """tasks satırı + adımlar → eski JSON görev şekli (camelCase); UI sözleşmesi bozulmasın."""
+    task = {
+        "id": row["id"],
+        "name": row["name"],
+        "steps": steps,
+        "pinned": bool(row["pinned"]),
+    }
+    description = row.get("description")
+    if isinstance(description, str) and description.strip():
+        task["description"] = description.strip()
+    return task
+
+
+def _insert_task_steps(conn, task_id, steps):
+    """Görev adımlarını task_steps tablosuna yazar."""
+    for order, step in enumerate(steps):
+        execute(
+            conn,
+            """
+            INSERT INTO task_steps (task_id, step_order, x, y, yaw, action_type)
+            VALUES (:task_id, :step_order, :x, :y, :yaw, :action_type)
+            """,
+            {
+                "task_id": task_id,
+                "step_order": order,
+                "x": step["x"],
+                "y": step["y"],
+                "yaw": step["yaw"],
+                "action_type": step["action"]["type"],
+            },
+        )
+
+
+def _list_map_tasks(conn, map_id):
+    """Haritaya ait tüm görevleri adımlarıyla birlikte listeler."""
+    result = execute(
+        conn,
+        """
+        SELECT id, name, description, pinned
+        FROM tasks
+        WHERE map_id = :map_id
+        ORDER BY created_at
+        """,
+        {"map_id": map_id},
+    )
+    tasks = []
+    for row in result.mappings().all():
+        steps = _fetch_task_steps(conn, row["id"])
+        tasks.append(_task_row_to_api(row, steps))
+    return tasks
+
+
+def _zone_row_to_api(row):
+    """forbidden_zones satırını camelCase API nesnesine çevirir."""
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "xMin": float(row["x_min"]),
+        "xMax": float(row["x_max"]),
+        "yMin": float(row["y_min"]),
+        "yMax": float(row["y_max"]),
+    }
+
+
+def _normalize_forbidden_zone(raw):
+    """
+    Yasak dikdörtgen doğrular: name + xMin<xMax, yMin<yMax (hepsi sayı).
+    Geofence poligonundan farklı — birden fazla dikdörtgen tutulabilir; id yoksa üretilir.
+    """
+    if not isinstance(raw, dict):
+        return None
+    name = raw.get("name")
+    x_min, x_max = raw.get("xMin"), raw.get("xMax")
+    y_min, y_max = raw.get("yMin"), raw.get("yMax")
+    if not isinstance(name, str) or not name.strip():
+        return None
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (x_min, x_max, y_min, y_max)):
+        return None
+    if not (x_min < x_max and y_min < y_max):
+        return None
+    return {
+        "id": raw.get("id") or f"zone_{uuid.uuid4().hex[:8]}",
+        "name": name.strip(),
+        "xMin": float(x_min),
+        "xMax": float(x_max),
+        "yMin": float(y_min),
+        "yMax": float(y_max),
+    }
+
+
+def _trim_task_history(conn, map_id):
+    """Harita başına en fazla TASK_HISTORY_MAX — sınırsız büyüme / modal şişmesini önler."""
+    # İç içe SELECT: PostgreSQL, silinen tabloyu doğrudan alt sorguda referanslamaya izin vermez
+    execute(
+        conn,
+        """
+        DELETE FROM task_history
+        WHERE map_id = :map_id
+          AND id NOT IN (
+            SELECT id FROM (
+              SELECT id FROM task_history
+              WHERE map_id = :map_id
+              ORDER BY timestamp DESC
+              LIMIT :limit
+            ) keep_rows
+          )
+        """,
+        {"map_id": map_id, "limit": TASK_HISTORY_MAX},
+    )
 
 
 # GET /api/map/metadata — Herkese açık. Operatör + mühendis paneli.
@@ -364,7 +489,7 @@ def list_maps():
 
 
 # POST /api/maps — PIN korumalı. Yeni sera/simülasyon haritası kaydı.
-# Neden: tek sabit MAP_DIRECTORY yetmez; her haritanın kendi imageDir + data/<id>/ klasörü olmalı.
+# Neden: tek sabit MAP_DIRECTORY yetmez; her haritanın kendi imageDir'i olmalı.
 # Otomatik aktive edilmez — mühendis bilerek switch etsin, operatör aniden boş haritaya düşmesin.
 @app.route('/api/maps', methods=['POST'])
 def create_map():
@@ -406,30 +531,29 @@ def create_map():
     while _find_map(map_id):
         map_id = f"map_{secrets.token_hex(4)}"
 
-    data_dir = _map_data_dir(map_id)
-    try:
-        os.makedirs(data_dir, exist_ok=False)
-    except FileExistsError:
-        return jsonify({"error": "Map data directory already exists"}), 500
-
-    # Görev/sınır verisi harita başına ayrı — başka haritanın kayıtları karışmasın.
-    _write_json_file(_map_data_file(map_id, "tasks.json"), [])
-    _write_json_file(_map_data_file(map_id, "forbidden_zones.json"), [])
-    _write_json_file(_map_data_file(map_id, "boundary.json"), None)
-    # Boş geçmiş: GET/POST hemen çalışsın; dosya yok hatası olmasın
-    _write_json_file(_map_data_file(map_id, "task_history.json"), [])
+    created_at = datetime.now(timezone.utc)
+    with db_conn(commit=True) as conn:
+        execute(
+            conn,
+            """
+            INSERT INTO maps (id, name, image_dir, is_active, created_at)
+            VALUES (:id, :name, :image_dir, FALSE, :created_at)
+            """,
+            {
+                "id": map_id,
+                "name": name.strip(),
+                "image_dir": source_dir,
+                "created_at": created_at,
+            },
+        )
 
     entry = {
         "id": map_id,
         "name": name.strip(),
         "imageDir": source_dir,
         "isActive": False,
-        "createdAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "createdAt": _fmt_ts(created_at),
     }
-    maps = _load_maps()
-    maps.append(entry)
-    _save_maps(maps)
-
     return jsonify(entry), 201
 
 
@@ -444,25 +568,20 @@ def activate_map(map_id):
     if not _validate_map_id(map_id):
         return jsonify({"error": "Invalid map id"}), 400
 
-    maps = _load_maps()
-    found = False
-    for entry in maps:
-        if entry.get("id") == map_id:
-            entry["isActive"] = True
-            found = True
-        else:
-            entry["isActive"] = False
+    with db_conn(commit=True) as conn:
+        result = execute(conn, "SELECT id FROM maps WHERE id = :id", {"id": map_id})
+        if not result.mappings().first():
+            return jsonify({"error": "Map not found"}), 404
 
-    if not found:
-        return jsonify({"error": "Map not found"}), 404
+        execute(conn, "UPDATE maps SET is_active = FALSE WHERE is_active = TRUE")
+        execute(conn, "UPDATE maps SET is_active = TRUE WHERE id = :id", {"id": map_id})
 
-    _save_maps(maps)
     return jsonify({"id": map_id, "isActive": True})
 
 
 # DELETE /api/maps/<map_id> — PIN korumalı.
 # Aktif harita silinmez: panel anında boş/404'e düşmesin. map_default silinmez: ana sera yedeği kalsın.
-# imageDir silinmez: diskteki SLAM çıktısı elle temizlenir; yanlışlıkla harita dosyası kaybolmasın.
+# imageDir silinmez: diskteki SLAM çıktısı elle temizlenir; CASCADE yalnızca DB kayıtlarını kaldırır.
 @app.route('/api/maps/<map_id>', methods=['DELETE'])
 def delete_map(map_id):
     denied = _require_admin()
@@ -475,8 +594,7 @@ def delete_map(map_id):
     if map_id == PROTECTED_MAP_ID:
         return jsonify({"error": "map_default cannot be deleted"}), 400
 
-    maps = _load_maps()
-    entry = next((m for m in maps if m.get("id") == map_id), None)
+    entry = _find_map(map_id)
     if not entry:
         return jsonify({"error": "Map not found"}), 404
 
@@ -485,19 +603,14 @@ def delete_map(map_id):
             "error": "Aktif haritayı silemezsiniz, önce başka bir haritayı aktive edin",
         }), 400
 
-    remaining = [m for m in maps if m.get("id") != map_id]
-    _save_maps(remaining)
-
-    data_dir = _map_data_dir(map_id)
-    # imageDir silinmez — yalnızca görev/sınır verisi klasörü kaldırılır.
-    if os.path.isdir(data_dir):
-        shutil.rmtree(data_dir)
+    with db_conn(commit=True) as conn:
+        execute(conn, "DELETE FROM maps WHERE id = :id", {"id": map_id})
 
     return jsonify({"deleted": map_id})
 
 
 # GET /api/maps/active — Herkese açık. Operatör + mühendis paneli.
-# maps.json içinde isActive: true olan tek haritanın kimliğini ve adını döner.
+# isActive=true olan tek haritanın kimliğini ve adını döner.
 @app.route('/api/maps/active', methods=['GET'])
 def get_active_map():
     active = _get_active_map_entry()
@@ -514,10 +627,12 @@ def get_active_map():
 # Görev listesini döner (tek adımlı / çok adımlı).
 @app.route('/api/maps/<map_id>/tasks', methods=['GET'])
 def get_map_tasks(map_id):
-    data, error = _read_map_data_file(map_id, "tasks.json")
+    _, error = _require_map(map_id)
     if error:
         return error
-    return jsonify(data)
+
+    with db_conn() as conn:
+        return jsonify(_list_map_tasks(conn, map_id))
 
 
 # POST /api/maps/<map_id>/tasks — PIN korumalı. Yalnızca mühendis paneli.
@@ -533,15 +648,31 @@ def add_map_task(map_id):
     if task is None:
         return jsonify({"error": "Expected {name, steps: [{x,y,yaw}, ...]}"}), 400
 
-    data, error = _read_map_data_file(map_id, "tasks.json")
+    _, error = _require_map(map_id)
     if error:
         return error
 
-    if any(item.get("id") == task["id"] for item in data):
-        task["id"] = f"task_{uuid.uuid4().hex[:8]}"
+    with db_conn(commit=True) as conn:
+        result = execute(conn, "SELECT id FROM tasks WHERE id = :id", {"id": task["id"]})
+        if result.mappings().first():
+            task["id"] = f"task_{uuid.uuid4().hex[:8]}"
 
-    data.append(task)
-    _write_json_file(_map_data_file(map_id, "tasks.json"), data)
+        execute(
+            conn,
+            """
+            INSERT INTO tasks (id, map_id, name, description, pinned)
+            VALUES (:id, :map_id, :name, :description, :pinned)
+            """,
+            {
+                "id": task["id"],
+                "map_id": map_id,
+                "name": task["name"],
+                "description": task.get("description"),
+                "pinned": task["pinned"],
+            },
+        )
+        _insert_task_steps(conn, task["id"], task["steps"])
+
     return jsonify(task), 201
 
 
@@ -555,15 +686,23 @@ def update_map_task(map_id, task_id):
     if not isinstance(payload, dict):
         return jsonify({"error": "Expected JSON body"}), 400
 
-    data, error = _read_map_data_file(map_id, "tasks.json")
+    _, error = _require_map(map_id)
     if error:
         return error
 
-    index = next((i for i, item in enumerate(data) if item.get("id") == task_id), None)
-    if index is None:
-        return jsonify({"error": "Task not found"}), 404
+    with db_conn() as conn:
+        result = execute(
+            conn,
+            "SELECT id, name, description, pinned FROM tasks WHERE id = :task_id AND map_id = :map_id",
+            {"task_id": task_id, "map_id": map_id},
+        )
+        row = result.mappings().first()
+        if not row:
+            return jsonify({"error": "Task not found"}), 404
 
-    existing = data[index]
+        existing_steps = _fetch_task_steps(conn, task_id)
+        existing = _task_row_to_api(row, existing_steps)
+
     # Mühendis kaydı pinned göndermezse mevcut sabitleme sıfırlanmasın (AddTaskModal alanı yok)
     if "pinned" not in payload:
         payload = {**payload, "pinned": bool(existing.get("pinned", False))}
@@ -586,12 +725,29 @@ def update_map_task(map_id, task_id):
         if not content_same:
             return auth_error
 
-    data[index] = task
-    _write_json_file(_map_data_file(map_id, "tasks.json"), data)
+    with db_conn(commit=True) as conn:
+        execute(
+            conn,
+            """
+            UPDATE tasks
+            SET name = :name, description = :description, pinned = :pinned
+            WHERE id = :task_id AND map_id = :map_id
+            """,
+            {
+                "task_id": task_id,
+                "map_id": map_id,
+                "name": task["name"],
+                "description": task.get("description"),
+                "pinned": task["pinned"],
+            },
+        )
+        execute(conn, "DELETE FROM task_steps WHERE task_id = :task_id", {"task_id": task_id})
+        _insert_task_steps(conn, task_id, task["steps"])
+
     return jsonify(task)
 
 
-# Mühendis paneli: görevi tasks.json'dan kalıcı olarak kaldırır.
+# Mühendis paneli: görevi kalıcı olarak kaldırır.
 # DELETE /api/maps/<map_id>/tasks/<task_id> — PIN korumalı. Yalnızca mühendis paneli.
 @app.route('/api/maps/<map_id>/tasks/<task_id>', methods=['DELETE'])
 def delete_map_task(map_id, task_id):
@@ -599,32 +755,49 @@ def delete_map_task(map_id, task_id):
     if auth_error:
         return auth_error
 
-    data, error = _read_map_data_file(map_id, "tasks.json")
+    _, error = _require_map(map_id)
     if error:
         return error
 
-    next_data = [item for item in data if item.get("id") != task_id]
-    if len(next_data) == len(data):
-        return jsonify({"error": "Task not found"}), 404
+    with db_conn(commit=True) as conn:
+        result = execute(
+            conn,
+            "DELETE FROM tasks WHERE id = :task_id AND map_id = :map_id RETURNING id",
+            {"task_id": task_id, "map_id": map_id},
+        )
+        if not result.mappings().first():
+            return jsonify({"error": "Task not found"}), 404
 
-    _write_json_file(_map_data_file(map_id, "tasks.json"), next_data)
     return jsonify({"ok": True})
 
 
-# Görev geçmişi — nav_relay/Nav2'dan bağımsız yan log; UI modalı okur.
-# Üst sınır: disk şişmesin, eski kayıtlar düşürülsün.
-TASK_HISTORY_MAX = 200
-TASK_HISTORY_STATUSES = {"başlatıldı", "başarılı", "iptal edildi", "başarısız"}
-
-
 # GET /api/maps/<map_id>/task-history — Herkese açık.
-# Neden reverse? Dosyada kronolojik append (eski→yeni); liste en yeniyi üstte ister.
+# Neden DESC? En yeni kayıt üstte; eski JSON'daki reverse davranışı korunur.
 @app.route('/api/maps/<map_id>/task-history', methods=['GET'])
 def get_map_task_history(map_id):
-    data, error = _read_map_data_file(map_id, "task_history.json")
+    _, error = _require_map(map_id)
     if error:
         return error
-    return jsonify(list(reversed(data)))
+
+    with db_conn() as conn:
+        result = execute(
+            conn,
+            """
+            SELECT task_name, status, timestamp
+            FROM task_history
+            WHERE map_id = :map_id
+            ORDER BY timestamp DESC
+            """,
+            {"map_id": map_id},
+        )
+        entries = []
+        for row in result.mappings().all():
+            entries.append({
+                "taskName": row["task_name"],
+                "status": row["status"],
+                "timestamp": _fmt_ts(row["timestamp"]),
+            })
+    return jsonify(entries)
 
 
 # POST /api/maps/<map_id>/task-history — PIN yok: operatör paneli fire-and-forget loglar.
@@ -644,25 +817,36 @@ def add_map_task_history(map_id):
             "error": "Expected status one of: başlatıldı, başarılı, iptal edildi, başarısız",
         }), 400
 
-    timestamp = payload.get("timestamp")
-    if not isinstance(timestamp, str) or not timestamp.strip():
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    timestamp = _parse_ts(payload.get("timestamp"))
+    if timestamp is None:
+        timestamp = _fmt_ts(datetime.now(timezone.utc))
 
-    data, error = _read_map_data_file(map_id, "task_history.json")
+    _, error = _require_map(map_id)
     if error:
         return error
 
     entry = {
         "taskName": task_name.strip(),
         "status": status,
-        "timestamp": timestamp.strip(),
+        "timestamp": timestamp,
     }
-    data.append(entry)
-    # Ring buffer: sonsuz büyüyen geçmiş dosyasını önlemek için
-    if len(data) > TASK_HISTORY_MAX:
-        data = data[-TASK_HISTORY_MAX:]
 
-    _write_json_file(_map_data_file(map_id, "task_history.json"), data)
+    with db_conn(commit=True) as conn:
+        execute(
+            conn,
+            """
+            INSERT INTO task_history (map_id, task_name, status, timestamp)
+            VALUES (:map_id, :task_name, :status, CAST(:timestamp AS timestamptz))
+            """,
+            {
+                "map_id": map_id,
+                "task_name": entry["taskName"],
+                "status": entry["status"],
+                "timestamp": entry["timestamp"],
+            },
+        )
+        _trim_task_history(conn, map_id)
+
     return jsonify(entry), 201
 
 
@@ -670,18 +854,23 @@ def add_map_task_history(map_id):
 # Geofence poligonunu döner; sınır çizilmemişse null (operatör hedef kontrolünde sınır atlanır).
 @app.route('/api/maps/<map_id>/boundary', methods=['GET'])
 def get_map_boundary(map_id):
-    if not _validate_map_id(map_id):
-        return jsonify({"error": "Invalid map id"}), 400
-    if not _find_map(map_id):
-        return jsonify({"error": "Map not found"}), 404
+    _, error = _require_map(map_id)
+    if error:
+        return error
 
-    path = _boundary_file(map_id)
-    if not os.path.exists(path):
+    with db_conn() as conn:
+        result = execute(
+            conn,
+            "SELECT points FROM boundaries WHERE map_id = :map_id",
+            {"map_id": map_id},
+        )
+        row = result.mappings().first()
+
+    if not row:
         return jsonify(None)
 
-    data = _read_json_file(path, default=None)
-    points = _normalize_boundary_points(data)
-    if not points or len(points) < 3:  # geçerli poligon için en az 3 köşe gerekir
+    points = _normalize_boundary_points(_jsonb_to_points(row["points"]))
+    if not points or len(points) < 3:
         return jsonify(None)
     return jsonify({"points": points})
 
@@ -694,17 +883,26 @@ def save_map_boundary(map_id):
     if auth_error:
         return auth_error
 
-    if not _validate_map_id(map_id):
-        return jsonify({"error": "Invalid map id"}), 400
-    if not _find_map(map_id):
-        return jsonify({"error": "Map not found"}), 404
+    _, error = _require_map(map_id)
+    if error:
+        return error
 
     payload = request.get_json(silent=True)
     points = _normalize_boundary_points(payload)
     if points is None or len(points) < 3:
         return jsonify({"error": "Boundary requires at least 3 {x, y} points"}), 400
 
-    _write_json_file(_boundary_file(map_id), {"points": points})
+    with db_conn(commit=True) as conn:
+        execute(
+            conn,
+            """
+            INSERT INTO boundaries (map_id, points)
+            VALUES (:map_id, CAST(:points AS jsonb))
+            ON CONFLICT (map_id) DO UPDATE SET points = CAST(:points AS jsonb)
+            """,
+            {"map_id": map_id, "points": json.dumps({"points": points})},
+        )
+
     return jsonify({"points": points})
 
 
@@ -716,14 +914,13 @@ def delete_map_boundary(map_id):
     if auth_error:
         return auth_error
 
-    if not _validate_map_id(map_id):
-        return jsonify({"error": "Invalid map id"}), 400
-    if not _find_map(map_id):
-        return jsonify({"error": "Map not found"}), 404
+    _, error = _require_map(map_id)
+    if error:
+        return error
 
-    path = _boundary_file(map_id)
-    if os.path.exists(path):
-        os.remove(path)
+    with db_conn(commit=True) as conn:
+        execute(conn, "DELETE FROM boundaries WHERE map_id = :map_id", {"map_id": map_id})
+
     return jsonify({"ok": True})
 
 
@@ -731,36 +928,24 @@ def delete_map_boundary(map_id):
 # Operatör panelinde hedef seçilirken kontrol edilen dikdörtgen yasak bölgeleri listeler.
 @app.route('/api/maps/<map_id>/forbidden-zones', methods=['GET'])
 def get_map_forbidden_zones(map_id):
-    data, error = _read_map_data_file(map_id, "forbidden_zones.json")
+    _, error = _require_map(map_id)
     if error:
         return error
-    return jsonify(data)
 
+    with db_conn() as conn:
+        result = execute(
+            conn,
+            """
+            SELECT id, name, x_min, x_max, y_min, y_max
+            FROM forbidden_zones
+            WHERE map_id = :map_id
+            ORDER BY name
+            """,
+            {"map_id": map_id},
+        )
+        zones = [_zone_row_to_api(row) for row in result.mappings().all()]
 
-def _normalize_forbidden_zone(raw):
-    """
-    Yasak dikdörtgen doğrular: name + xMin<xMax, yMin<yMax (hepsi sayı).
-    Geofence poligonundan farklı — birden fazla dikdörtgen tutulabilir; id yoksa üretilir.
-    """
-    if not isinstance(raw, dict):
-        return None
-    name = raw.get("name")
-    x_min, x_max = raw.get("xMin"), raw.get("xMax")
-    y_min, y_max = raw.get("yMin"), raw.get("yMax")
-    if not isinstance(name, str) or not name.strip():
-        return None
-    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (x_min, x_max, y_min, y_max)):
-        return None
-    if not (x_min < x_max and y_min < y_max):
-        return None
-    return {
-        "id": raw.get("id") or f"zone_{uuid.uuid4().hex[:8]}",
-        "name": name.strip(),
-        "xMin": float(x_min),
-        "xMax": float(x_max),
-        "yMin": float(y_min),
-        "yMax": float(y_max),
-    }
+    return jsonify(zones)
 
 
 # POST /api/maps/<map_id>/forbidden-zones — PIN korumalı. Yalnızca mühendis paneli.
@@ -776,20 +961,37 @@ def add_map_forbidden_zone(map_id):
     if zone is None:
         return jsonify({"error": "Expected {name, xMin, xMax, yMin, yMax} with xMin<xMax and yMin<yMax"}), 400
 
-    data, error = _read_map_data_file(map_id, "forbidden_zones.json")
+    _, error = _require_map(map_id)
     if error:
         return error
 
-    if any(item.get("id") == zone["id"] for item in data):
-        zone["id"] = f"zone_{uuid.uuid4().hex[:8]}"
+    with db_conn(commit=True) as conn:
+        result = execute(conn, "SELECT id FROM forbidden_zones WHERE id = :id", {"id": zone["id"]})
+        if result.mappings().first():
+            zone["id"] = f"zone_{uuid.uuid4().hex[:8]}"
 
-    data.append(zone)
-    _write_json_file(_map_data_file(map_id, "forbidden_zones.json"), data)
+        execute(
+            conn,
+            """
+            INSERT INTO forbidden_zones (id, map_id, name, x_min, x_max, y_min, y_max)
+            VALUES (:id, :map_id, :name, :x_min, :x_max, :y_min, :y_max)
+            """,
+            {
+                "id": zone["id"],
+                "map_id": map_id,
+                "name": zone["name"],
+                "x_min": zone["xMin"],
+                "x_max": zone["xMax"],
+                "y_min": zone["yMin"],
+                "y_max": zone["yMax"],
+            },
+        )
+
     return jsonify(zone), 201
 
 
 # DELETE /api/maps/<map_id>/forbidden-zones/<zone_id> — PIN korumalı. Yalnızca mühendis paneli.
-# Tek bir yasak dikdörtgeni listeden çıkarır (geofence gibi tek dosya silinmez; çoklu bölge).
+# Tek bir yasak dikdörtgeni listeden çıkarır.
 @app.route('/api/maps/<map_id>/forbidden-zones/<zone_id>', methods=['DELETE'])
 def delete_map_forbidden_zone(map_id, zone_id):
     auth_error = _require_admin()
@@ -799,15 +1001,23 @@ def delete_map_forbidden_zone(map_id, zone_id):
     if not _validate_map_id(map_id):
         return jsonify({"error": "Invalid map id"}), 400
 
-    data, error = _read_map_data_file(map_id, "forbidden_zones.json")
+    _, error = _require_map(map_id)
     if error:
         return error
 
-    next_data = [item for item in data if item.get("id") != zone_id]
-    if len(next_data) == len(data):
-        return jsonify({"error": "Forbidden zone not found"}), 404
+    with db_conn(commit=True) as conn:
+        result = execute(
+            conn,
+            """
+            DELETE FROM forbidden_zones
+            WHERE id = :zone_id AND map_id = :map_id
+            RETURNING id
+            """,
+            {"zone_id": zone_id, "map_id": map_id},
+        )
+        if not result.mappings().first():
+            return jsonify({"error": "Forbidden zone not found"}), 404
 
-    _write_json_file(_map_data_file(map_id, "forbidden_zones.json"), next_data)
     return jsonify({"ok": True})
 
 

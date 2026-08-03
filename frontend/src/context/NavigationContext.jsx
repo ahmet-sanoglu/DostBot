@@ -129,6 +129,10 @@ export function NavigationProvider({ children }) {
   const busyTimerRef = useRef(null);  // NAV_BUSY_MS yedek; result/rejected gelince clearTimeout
   const wasBusyRef = useRef(false);
   const estopTriggeredRef = useRef(false);
+  // Tek atımlık: görev bitişi / rejected sonrası setQueueBusy(false) idle effect'ini
+  // "Görev tamamlandı" diye çift tetiklemesin diye bir sonraki busy→idle'ı yutar.
+  // Kritik: queueBusy zaten false iken set edilirse effect çalışmaz, bayrak true kalır;
+  // sonraki FARKLI görevin ilk Adım1→2 geçişi yanlışlıkla atlanır → startTask/sendNavigationGoal başında sıfırlanmalı.
   const skipNextIdleEventRef = useRef(false);
   const inStepActionRef = useRef(false);  // till gibi uzun eylem sürerken nav-tamamlandı effect'ini yutar
   const queueBusyRef = useRef(false);
@@ -240,27 +244,6 @@ export function NavigationProvider({ children }) {
     return true;
   }, [clearPlanPath, resetRecoveryState, ros, startBusyTimer]);
 
-  const sendNavigationGoal = useCallback((goal, sourceLabel) => {
-    if (queueBusy || pendingStepsRef.current.length > 0 || activeTaskRef.current) {
-      setShowBusyPopup(true);
-      return false;
-    }
-
-    // Yeni hedef: eski görev izi/rotası haritada kalmasın
-    setMapTrailResetKey((key) => key + 1);
-    setPreviewTask(null);
-    activeTaskRef.current = null;
-    setActiveTaskProgress(null);
-    pendingStepsRef.current = [];
-    historyStartLoggedRef.current = false;
-
-    const sent = dispatchGoal(goal, sourceLabel);
-    if (sent) {
-      addEvent(sourceLabel || 'Hedefe gidiyor');
-    }
-    return sent;
-  }, [addEvent, dispatchGoal, queueBusy]);
-
   const emergencyStopNavigation = useCallback(() => {
     // İptal kaydı — state temizlenmeden önce isim alınır (yan log; nav akışını değiştirmez)
     const hadWork = Boolean(activeTaskRef.current) || queueBusyRef.current;
@@ -275,7 +258,7 @@ export function NavigationProvider({ children }) {
     setPreviewTask(null);
     setCoverageStatus(null);
     setNavDistanceRemaining(null);
-    skipNextIdleEventRef.current = false;
+    skipNextIdleEventRef.current = false; // estop sonrası idle zinciri temiz başlasın
     inStepActionRef.current = false;
     historyStartLoggedRef.current = false;
     resetRecoveryState();
@@ -324,13 +307,17 @@ export function NavigationProvider({ children }) {
       return;
     }
 
+    // Kuyruk boş → görev bitti: activeTask kilidini mutlaka düşür (yoksa startTask sonsuza meşgul kalır)
     addEvent(`${activeTask.taskName} tamamlandı`);
     logTaskHistory('başarılı', activeTask.taskName);
     historyStartLoggedRef.current = false;
     activeTaskRef.current = null;
     setActiveTaskProgress(null);
     pendingStepsRef.current = [];
+    inStepActionRef.current = false;
     setQueueBusy(false);
+    // Bu idle'ı yut: activeTask zaten null; effect "Görev tamamlandı" diye tekrar yazmasın.
+    // Tek atımlık — yeni görev startTask'ta false'a çekilmezse sonraki görevin ilk idle'ı da yutulur.
     skipNextIdleEventRef.current = true;
   }, [addEvent, dispatchGoal, logTaskHistory]);
 
@@ -409,7 +396,57 @@ export function NavigationProvider({ children }) {
     runStepAction(actionType, activeTask.currentStep, activeTask.taskName);
   }, [addEvent, runStepAction]);
 
+  /**
+   * Yalnızca kullanıcı yeni görev/hedef başlatırken çağrılır.
+   * Nav zincirine (result → idle → proceed) karışmaz; ara adımlarda activeTask silinmez.
+   * queueBusy kapalı + kuyruk boş + eylem yok iken kalan activeTask = stale kilit.
+   */
+  const clearStaleActiveTaskIfIdle = useCallback(() => {
+    if (
+      queueBusy
+      || pendingStepsRef.current.length > 0
+      || inStepActionRef.current
+    ) {
+      return;
+    }
+    if (activeTaskRef.current) {
+      activeTaskRef.current = null;
+      setActiveTaskProgress(null);
+    }
+  }, [queueBusy]);
+
+  const sendNavigationGoal = useCallback((goal, sourceLabel) => {
+    // Önceki görev bitişinde true kalan skip, bu hedefin (veya sonraki görevin) idle zincirini
+    // yanlışlıkla atlamasın — her yeni hedef temiz bayrakla başlamalı.
+    skipNextIdleEventRef.current = false;
+    clearStaleActiveTaskIfIdle();
+    if (queueBusy || pendingStepsRef.current.length > 0 || activeTaskRef.current) {
+      setShowBusyPopup(true);
+      return false;
+    }
+
+    // Yeni hedef: eski görev izi/rotası haritada kalmasın
+    setMapTrailResetKey((key) => key + 1);
+    setPreviewTask(null);
+    activeTaskRef.current = null;
+    setActiveTaskProgress(null);
+    pendingStepsRef.current = [];
+    historyStartLoggedRef.current = false;
+
+    const sent = dispatchGoal(goal, sourceLabel);
+    if (sent) {
+      addEvent(sourceLabel || 'Hedefe gidiyor');
+    }
+    return sent;
+  }, [addEvent, clearStaleActiveTaskIfIdle, dispatchGoal, queueBusy]);
+
   const startTask = useCallback((task) => {
+    // Kritik sıfırlama: önceki görevin (ör. "Base'e Git") bitişinde true kalan skipNextIdleEvent,
+    // queueBusy zaten false olduğu için idle effect'te tüketilmemiş olabilir. Tüketilmezse
+    // bu yeni görevin kendi ilk busy→idle geçişi (çok adımlı: Adım 1→2) yanlışlıkla atlanır.
+    // Bayrak yalnızca "bir sonraki idle" içindir; her yeni görev temiz başlamalı.
+    skipNextIdleEventRef.current = false;
+    clearStaleActiveTaskIfIdle();
     if (queueBusy || pendingStepsRef.current.length > 0 || activeTaskRef.current) {
       setShowBusyPopup(true);
       return false;
@@ -448,7 +485,7 @@ export function NavigationProvider({ children }) {
       pendingStepsRef.current = [];
     }
     return sent;
-  }, [addEvent, dispatchGoal, queueBusy]);
+  }, [addEvent, clearStaleActiveTaskIfIdle, dispatchGoal, queueBusy]);
 
   // /agrifleet/nav_status — tek güvenilir kaynak (nav_relay); status_list / ID tahmini yok
   useEffect(() => {
@@ -497,7 +534,7 @@ export function NavigationProvider({ children }) {
         pendingStepsRef.current = [];
         activeTaskRef.current = null;
         setActiveTaskProgress(null);
-        skipNextIdleEventRef.current = true;
+        skipNextIdleEventRef.current = true; // rejected sonrası idle "tamamlandı" spam'i olmasın
         historyStartLoggedRef.current = false;
         addEvent('Hedef reddedildi');
         logTaskHistory('başarısız', rejectedName);
@@ -531,7 +568,8 @@ export function NavigationProvider({ children }) {
           historyStartLoggedRef.current = false;
         }
 
-        // 4=SUCCEEDED, 5=CANCELED, 6=ABORTED — hepsi meşguliyeti kapatır; zincir effect'e bırakılır
+        // 4=SUCCEEDED, 5=CANCELED, 6=ABORTED — meşguliyeti kapat; adım zinciri idle effect'e bırakılır
+        // (stale temizleme burada YOK — ara adımlarda activeTask'i silmemek için)
         if (
           resultStatus === NAV_RESULT_SUCCEEDED
           || resultStatus === NAV_RESULT_CANCELED
@@ -556,6 +594,7 @@ export function NavigationProvider({ children }) {
   useEffect(() => {
     if (wasBusyRef.current && !queueBusy) {
       if (skipNextIdleEventRef.current) {
+        // Tek kullanım: yuttuktan sonra mutlaka false — aksi halde sonraki idle'lar da atlanır
         skipNextIdleEventRef.current = false;
         wasBusyRef.current = queueBusy;
         return;
