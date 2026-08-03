@@ -54,8 +54,13 @@ CREATE TABLE IF NOT EXISTS task_history (
     map_id TEXT REFERENCES maps(id) ON DELETE CASCADE,
     task_name TEXT NOT NULL,
     status TEXT NOT NULL,
-    timestamp TIMESTAMPTZ DEFAULT now()
+    timestamp TIMESTAMPTZ DEFAULT now(),
+    -- Aynı navigasyon run'ının başlatıldı + terminal satırlarını bağlar.
+    -- Neden? FIFO (task_name sırası) orphan start ile off-by-one üretiyordu.
+    run_id TEXT
 );
 
 -- Modal "en yeni üstte" listeler; harita+zaman indeksi tarama maliyetini düşürür
 CREATE INDEX IF NOT EXISTS idx_task_history_map ON task_history(map_id, timestamp DESC);
+-- run_id birleştirme / GET filtreleri için
+CREATE INDEX IF NOT EXISTS idx_task_history_run ON task_history(map_id, run_id);

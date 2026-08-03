@@ -132,7 +132,8 @@ export default function EngineerPage() {
     }
   }, [authenticated, loadMapData]);
 
-  // Harita kartı dış kutusu → kamera kartına birebir sabit width/height (px)
+  // Harita kartı yüksekliği → kamera kartına (genişlik flex ile paylaşılır).
+  // Neden? Kamera haritadan kısa kalmasın / wrap ile alta düşmesin; yan yana eşit yükseklik.
   useEffect(() => {
     if (!authenticated) return undefined;
     const el = mapCardRef.current;
@@ -444,7 +445,7 @@ export default function EngineerPage() {
       {/* Dış grid: sol harita|kamera yan yana; sağ Durum / Görevler|Ayarlar */}
       <div className="engineer-page__body">
         <div className="engineer-page__visuals">
-          {/* Kart fit-content — sütunu doldurmasın; canvas 340/480 px kalsın */}
+          {/* Kart genişliği → mini harita ResizeObserver (sabit 340px yok) */}
           <div
             ref={mapCardRef}
             className={`engineer-page__map panel-card${mapDrawActive ? ' engineer-page__map--draw' : ''}`}
@@ -468,12 +469,12 @@ export default function EngineerPage() {
             />
           </div>
 
-          {/* Haritanın sağında; dış kutu harita kartıyla aynı sabit px */}
+          {/* Yükseklik haritadan; genişlik flex ile eşit paylaşılır (wrap düşmesin) */}
           <div
             className="engineer-page__camera panel-card"
             style={mapCardSize ? {
-              width: mapCardSize.width,
               height: mapCardSize.height,
+              maxHeight: mapCardSize.height,
             } : undefined}
           >
             <div className="panel-card__title panel-card__title--compact">

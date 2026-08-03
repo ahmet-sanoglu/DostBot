@@ -34,6 +34,30 @@ load_dotenv()
 
 app = Flask(__name__)
 
+
+def _ensure_task_history_run_id_column():
+    """
+    Mevcut DB'de run_id yoksa ekle.
+    Neden startup'ta? CREATE TABLE IF NOT EXISTS eski tablolara sütun eklemez;
+    migration dosyasını elle çalıştırmadan da GET/POST kırılmasın.
+    """
+    try:
+        with db_conn(commit=True) as conn:
+            execute(
+                conn,
+                "ALTER TABLE task_history ADD COLUMN IF NOT EXISTS run_id TEXT",
+            )
+            execute(
+                conn,
+                "CREATE INDEX IF NOT EXISTS idx_task_history_run ON task_history(map_id, run_id)",
+            )
+    except Exception as exc:
+        # Sunucu ayağa kalksın; POST run_id yazamazsa log'dan görünür
+        print(f"[schema] task_history.run_id migration skipped: {exc}")
+
+
+_ensure_task_history_run_id_column()
+
 # Tarayıcıdaki React uygulamasının (localhost:5173) bu sunucuya istek atabilmesi için CORS açılır.
 # X-Admin-Pin başlığına izin verilir; mühendis paneli yazma işlemlerinde bunu gönderir.
 CORS(
@@ -51,6 +75,9 @@ MAP_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 ADMIN_PIN = os.getenv("ADMIN_PIN", "")
 # RTSP kamera URL — boşsa /api/camera/stream 503; tarayıcı native RTSP oynatamadığı için MJPEG gerekir.
 CAMERA_RTSP_URL = os.getenv("CAMERA_RTSP_URL", "")
+# sim = web_video_server (:8080 /camera/image_raw); real = RTSP proxy (/api/camera/stream)
+_CAMERA_MODE_RAW = os.getenv("CAMERA_MODE", "real").strip().lower()
+CAMERA_MODE = "sim" if _CAMERA_MODE_RAW in {"sim", "simulation"} else "real"
 
 # Görev geçmişi — nav_relay/Nav2'dan bağımsız yan log; UI modalı okur.
 TASK_HISTORY_MAX = 200
@@ -772,7 +799,212 @@ def delete_map_task(map_id, task_id):
 
 
 # GET /api/maps/<map_id>/task-history — Herkese açık.
-# Neden DESC? En yeni kayıt üstte; eski JSON'daki reverse davranışı korunur.
+# Ham olayları (başlatıldı + sonuç) tek "run" nesnesine birleştirir — UI gün/durum gruplaması için.
+TERMINAL_HISTORY_STATUSES = {"başarılı", "iptal edildi", "başarısız"}
+# Sonuçsuz "başlatıldı" bu süreden eskiyse "devam ediyor" değil "yarım kaldı" (sunucu kesintisi / eski test).
+RUNNING_MAX_AGE_SECONDS = 10 * 60
+
+
+def _parse_iso_ts(value):
+    """ISO / TIMESTAMPTZ → aware UTC datetime; süre hesabı için."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    if isinstance(value, str):
+        raw = value.strip()
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    return None
+
+
+def _open_history_run(task_name, started, *, now):
+    """
+    Sonuçsuz başlatıldı → devam ediyor / yarım kaldı.
+    Neden yaş eşiği? Restart/test orphan'ları "şu an çalışıyor" sanılmasın.
+    """
+    age_seconds = (now - started).total_seconds()
+    if age_seconds <= RUNNING_MAX_AGE_SECONDS:
+        return {
+            "taskName": task_name,
+            "startedAt": _fmt_ts(started),
+            "endedAt": None,
+            "finalStatus": "devam ediyor",
+            "durationSeconds": None,
+        }
+    return {
+        "taskName": task_name,
+        "startedAt": _fmt_ts(started),
+        "endedAt": None,
+        "finalStatus": "yarım kaldı",
+        "durationSeconds": max(0, int(age_seconds)),
+    }
+
+
+def _merge_task_history_fifo(entries, *, now):
+    """
+    Legacy: run_id yokken aynı task_name + kronolojik FIFO.
+    Yalnızca migration öncesi satırlar için; yeni kayıtlar run_id kullanır.
+    Neden tutuluyor? Eski JSON→PG verisi silinmeden UI boşalmasın.
+    """
+    chronological = sorted(
+        entries,
+        key=lambda e: (_parse_iso_ts(e.get("timestamp")) or datetime.min.replace(tzinfo=timezone.utc)),
+    )
+    pending_starts = {}
+    runs = []
+
+    for entry in chronological:
+        task_name = entry.get("taskName") or ""
+        status = entry.get("status")
+        ts = _parse_iso_ts(entry.get("timestamp"))
+        if not task_name or ts is None:
+            continue
+
+        if status == "başlatıldı":
+            pending_starts.setdefault(task_name, []).append(ts)
+            continue
+
+        if status in TERMINAL_HISTORY_STATUSES:
+            starts = pending_starts.get(task_name) or []
+            if starts:
+                started = starts.pop(0)
+                duration = max(0, int((ts - started).total_seconds()))
+                runs.append({
+                    "taskName": task_name,
+                    "startedAt": _fmt_ts(started),
+                    "endedAt": _fmt_ts(ts),
+                    "finalStatus": status,
+                    "durationSeconds": duration,
+                })
+            else:
+                runs.append({
+                    "taskName": task_name,
+                    "startedAt": _fmt_ts(ts),
+                    "endedAt": _fmt_ts(ts),
+                    "finalStatus": status,
+                    "durationSeconds": 0,
+                })
+
+    for task_name, starts in pending_starts.items():
+        for started in starts:
+            runs.append(_open_history_run(task_name, started, now=now))
+
+    return runs
+
+
+def _merge_task_history_by_run_id(entries, *, now):
+    """
+    Aynı run_id altındaki başlatıldı + terminal → tek run.
+    Neden FIFO değil? Orphan start sonraki başarılıyı çalıyordu (off-by-one);
+    UUID ile her navigasyon run'ı izole kalır.
+    """
+    by_run = {}
+    for entry in entries:
+        run_id = entry.get("runId")
+        if not run_id:
+            continue
+        by_run.setdefault(run_id, []).append(entry)
+
+    runs = []
+    for run_id, events in by_run.items():
+        events_sorted = sorted(
+            events,
+            key=lambda e: (_parse_iso_ts(e.get("timestamp")) or datetime.min.replace(tzinfo=timezone.utc)),
+        )
+        starts = [e for e in events_sorted if e.get("status") == "başlatıldı"]
+        terminals = [
+            e for e in events_sorted
+            if e.get("status") in TERMINAL_HISTORY_STATUSES
+        ]
+
+        task_name = ""
+        for e in events_sorted:
+            if e.get("taskName"):
+                task_name = e["taskName"]
+                break
+        if not task_name:
+            continue
+
+        start_ts = _parse_iso_ts(starts[0].get("timestamp")) if starts else None
+        term = terminals[0] if terminals else None
+        term_ts = _parse_iso_ts(term.get("timestamp")) if term else None
+
+        if start_ts and term_ts:
+            duration = max(0, int((term_ts - start_ts).total_seconds()))
+            runs.append({
+                "taskName": task_name,
+                "startedAt": _fmt_ts(start_ts),
+                "endedAt": _fmt_ts(term_ts),
+                "finalStatus": term.get("status"),
+                "durationSeconds": duration,
+                "runId": run_id,
+            })
+        elif start_ts and not term_ts:
+            run = _open_history_run(task_name, start_ts, now=now)
+            run["runId"] = run_id
+            runs.append(run)
+        elif term_ts and not start_ts:
+            # Yetim terminal (accepted öncesi estop vb.)
+            runs.append({
+                "taskName": task_name,
+                "startedAt": _fmt_ts(term_ts),
+                "endedAt": _fmt_ts(term_ts),
+                "finalStatus": term.get("status"),
+                "durationSeconds": 0,
+                "runId": run_id,
+            })
+
+    return runs
+
+
+def _merge_task_history_runs(entries, *, now=None):
+    """
+    run_id varsa ona göre birleştir; yoksa (eski satırlar) task_name FIFO.
+    Neden iki yol? Yeni istemci UUID gönderir; migration öncesi satırlar NULL kalır.
+    Eşleşmeyen başlatıldı:
+      - startedAt son RUNNING_MAX_AGE_SECONDS içindeyse → 'devam ediyor'
+      - daha eskiyse → 'yarım kaldı'
+    Dönüş: en yeni run önce (startedAt DESC).
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    else:
+        now = now.astimezone(timezone.utc)
+
+    with_run_id = []
+    without_run_id = []
+    for entry in entries:
+        rid = entry.get("runId")
+        if isinstance(rid, str) and rid.strip():
+            with_run_id.append(entry)
+        else:
+            without_run_id.append(entry)
+
+    runs = _merge_task_history_by_run_id(with_run_id, now=now)
+    runs.extend(_merge_task_history_fifo(without_run_id, now=now))
+
+    runs.sort(
+        key=lambda r: (_parse_iso_ts(r.get("startedAt")) or datetime.min.replace(tzinfo=timezone.utc)),
+        reverse=True,
+    )
+    return runs
+
+
+# GET /api/maps/<map_id>/task-history — Herkese açık.
+# Ham olayları run'a birleştirir (run_id tercihli; yoksa FIFO) — UI Kanban için.
+# Neden birleştirme GET'te? POST fire-and-forget kalsın; yazım yolu nav'ı bekletmesin.
 @app.route('/api/maps/<map_id>/task-history', methods=['GET'])
 def get_map_task_history(map_id):
     _, error = _require_map(map_id)
@@ -783,25 +1015,29 @@ def get_map_task_history(map_id):
         result = execute(
             conn,
             """
-            SELECT task_name, status, timestamp
+            SELECT task_name, status, timestamp, run_id
             FROM task_history
             WHERE map_id = :map_id
-            ORDER BY timestamp DESC
+            ORDER BY timestamp ASC
             """,
             {"map_id": map_id},
         )
         entries = []
         for row in result.mappings().all():
-            entries.append({
+            entry = {
                 "taskName": row["task_name"],
                 "status": row["status"],
                 "timestamp": _fmt_ts(row["timestamp"]),
-            })
-    return jsonify(entries)
+            }
+            if row["run_id"]:
+                entry["runId"] = row["run_id"]
+            entries.append(entry)
+    return jsonify(_merge_task_history_runs(entries))
 
 
 # POST /api/maps/<map_id>/task-history — PIN yok: operatör paneli fire-and-forget loglar.
 # Neden ayrı endpoint? Nav durum makinesine bağlanmadan denetim izi tutmak için.
+# Ham olay yazar (başlatıldı/başarılı/…); birleştirme yalnızca GET'te yapılır.
 @app.route('/api/maps/<map_id>/task-history', methods=['POST'])
 def add_map_task_history(map_id):
     payload = request.get_json(silent=True)
@@ -821,6 +1057,12 @@ def add_map_task_history(map_id):
     if timestamp is None:
         timestamp = _fmt_ts(datetime.now(timezone.utc))
 
+    # runId opsiyonel: eski istemci / yetim terminal; max 128 — rastgele UUID yeter, abuse sınırı
+    run_id_raw = payload.get("runId")
+    run_id = None
+    if isinstance(run_id_raw, str) and run_id_raw.strip():
+        run_id = run_id_raw.strip()[:128]
+
     _, error = _require_map(map_id)
     if error:
         return error
@@ -830,19 +1072,22 @@ def add_map_task_history(map_id):
         "status": status,
         "timestamp": timestamp,
     }
+    if run_id:
+        entry["runId"] = run_id
 
     with db_conn(commit=True) as conn:
         execute(
             conn,
             """
-            INSERT INTO task_history (map_id, task_name, status, timestamp)
-            VALUES (:map_id, :task_name, :status, CAST(:timestamp AS timestamptz))
+            INSERT INTO task_history (map_id, task_name, status, timestamp, run_id)
+            VALUES (:map_id, :task_name, :status, CAST(:timestamp AS timestamptz), :run_id)
             """,
             {
                 "map_id": map_id,
                 "task_name": entry["taskName"],
                 "status": entry["status"],
                 "timestamp": entry["timestamp"],
+                "run_id": run_id,
             },
         )
         _trim_task_history(conn, map_id)
@@ -1060,6 +1305,13 @@ def is_rtsp_reachable(rtsp_url, timeout=2):
         return True
     except Exception:
         return False
+
+
+# GET /api/camera/mode — Frontend hangi akış URL'sini kullanacağını öğrenir (sim vs real).
+# Neden ayrı endpoint? CAMERA_MODE yalnızca sunucu .env'de; tarayıcıya sızdırmadan okunsun.
+@app.route('/api/camera/mode', methods=['GET'])
+def camera_mode():
+    return jsonify({"mode": CAMERA_MODE})
 
 
 # GET /api/camera/stream — RTSP → MJPEG.

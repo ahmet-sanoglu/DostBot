@@ -103,6 +103,10 @@
   overflow: hidden;
   padding: 0 24px;
   position: relative;
+  /* Flex column: main-content height:100% işlesin — kamera img sütunu 100vh dışına şişmesin
+     (PiP inset:0 o taşmış alanın altına snap ediyordu) */
+  display: flex;
+  flex-direction: column;
 }
 
 /* ── Status banner ── */
@@ -549,6 +553,7 @@
   grid-template-columns: minmax(0, 1fr) var(--layout-panel-width);
   flex: 1;
   min-height: 0;
+  height: 100%;
   overflow: hidden;
   background: var(--color-bg);
 }
@@ -557,59 +562,46 @@
   grid-template-columns: minmax(0, 1fr) var(--layout-panel-width) 280px;
 }
 
-.task-history-modal__header {
+.task-history-page {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 4px;
+  flex-direction: column;
+  gap: 16px;
+  box-sizing: border-box;
+  height: 100%;
+  min-height: 0;
+  padding: 20px 24px;
+  overflow: hidden;
+  background: var(--color-bg-subtle);
 }
 
-.engineer-modal .task-history-modal__title {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin: 0;
-  font-size: 1.0625rem;
-  min-width: 0;
-}
-
-.task-history-modal__actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.task-history-page__header {
   flex-shrink: 0;
 }
 
-.task-history-modal__close {
+.task-history-page__title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.task-history-page__title {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border: 0.5px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-bg);
-  color: var(--color-text-secondary);
-  font-size: 0.875rem;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.task-history-modal__close:hover {
+  gap: 10px;
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: var(--font-weight-medium);
   color: var(--color-text-primary);
-  border-color: var(--color-border-hover);
 }
 
-.task-history-card__map {
+.task-history-page__map {
   font-size: 0.8125rem;
-  font-weight: var(--font-weight-normal);
   color: var(--color-text-secondary);
 }
 
-.task-history-card__refresh {
+.task-history-page__refresh {
+  margin-left: auto;
   padding: 6px 12px;
   border: 0.5px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -619,63 +611,222 @@
   cursor: pointer;
 }
 
-.task-history-card__refresh:disabled {
+.task-history-page__refresh:disabled {
   opacity: 0.6;
   cursor: default;
 }
 
+/* 3 eşit sütun Kanban — her sütun kendi içinde dikey scroll */
+.task-history-board {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+  align-items: stretch;
+}
+
+.task-history-column {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border: 0.5px solid var(--color-border);
+  border-radius: 12px;
+  background: #f3f4f6;
+  overflow: hidden;
+}
+
+.task-history-column__header {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 14px 10px;
+  border-bottom: 0.5px solid var(--color-border);
+  background: var(--color-bg);
+}
+
+.task-history-column__title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.task-history-column__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.task-history-column__dot--running {
+  background: #ef4444;
+}
+
+.task-history-column__dot--success {
+  background: #22c55e;
+}
+
+.task-history-column__dot--cancel {
+  background: #f87171;
+  opacity: 0.65;
+}
+
+.task-history-column__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  min-width: 0;
+  font-size: 0.9375rem;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-history-column__count {
+  margin-left: auto;
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+}
+
+.task-history-day-select {
+  display: block;
+}
+
+.task-history-day-select select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 0.5px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.task-history-column__body {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.task-history-column__days {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.task-history-column__cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.task-history-day__heading {
+  margin: 0 0 8px;
+  font-size: 0.75rem;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+  letter-spacing: 0.01em;
+}
+
+.task-history-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--color-bg);
+  border: 0.5px solid transparent;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.04);
+}
+
+.task-history-card--success {
+  border-color: rgba(34, 197, 94, 0.28);
+}
+
+.task-history-card--warn {
+  border-color: rgba(234, 88, 12, 0.32);
+  background: #fffbf7;
+}
+
+.task-history-card--cancel {
+  border-color: rgba(248, 113, 113, 0.28);
+}
+
+.task-history-card--running {
+  border-color: rgba(239, 68, 68, 0.28);
+}
+
+.task-history-card--stale {
+  border-color: rgba(107, 114, 128, 0.28);
+  background: #f9fafb;
+}
+
+.task-history-card__name {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-history-card__location {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+}
+
+.task-history-card__status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin: 0;
+}
+
+.task-history-card__detail {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+}
+
 .task-history-empty,
 .task-history-error {
-  margin: 16px 0 0;
+  margin: 8px 0 0;
   font-size: 0.875rem;
   color: var(--color-text-secondary);
+}
+
+.task-history-empty--section {
+  margin: 4px 0 0;
+  font-size: 0.8125rem;
 }
 
 .task-history-error {
   color: #b91c1c;
 }
 
-.task-history-list {
-  list-style: none;
-  margin: 16px 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.task-history-list__item {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 14px;
-  border: 0.5px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-bg);
-}
-
-.task-history-list__name {
-  font-size: 0.875rem;
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.task-history-list__time {
-  font-size: 0.8125rem;
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-secondary);
-}
-
 .task-history-badge {
   display: inline-flex;
   align-items: center;
-  padding: 4px 10px;
-  border-radius: var(--radius-md);
-  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 0.6875rem;
   font-weight: var(--font-weight-medium);
   white-space: nowrap;
 }
@@ -683,6 +834,11 @@
 .task-history-badge--success {
   background: rgba(22, 163, 74, 0.12);
   color: #15803d;
+}
+
+.task-history-badge--warn {
+  background: rgba(234, 88, 12, 0.14);
+  color: #c2410c;
 }
 
 .task-history-badge--fail {
@@ -695,26 +851,80 @@
   color: #4b5563;
 }
 
+.task-history-badge--stale {
+  background: rgba(75, 85, 99, 0.12);
+  color: #6b7280;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 960px) {
+  .task-history-page {
+    overflow-y: auto;
+  }
+
+  .task-history-board {
+    grid-template-columns: 1fr;
+    grid-auto-rows: minmax(280px, 40vh);
+  }
+}
+
 .map-column {
   min-width: 0;
   min-height: 0;
+  height: 100%;
+  max-height: 100%;
   display: flex;
   flex-direction: column;
   position: relative;
   overflow: hidden;
 }
 
-/* Kontrol Paneli: kamera birincil, harita PiP */
+/* Kontrol Paneli: sütun hücreyi doldurur; .camera-stage oranı kareye uyar (cq). */
+.map-column--camera {
+  align-items: center;
+  justify-content: center;
+  container-type: size;
+  background: #0f1410;
+}
+
+/* Kamera birincil + PiP.
+ * --camera-ar: img naturalWidth/Height (varsayılan 16/9). Kutu sütuna sığar,
+ * object-fit:contain letterbox minimuma iner. PiP inset:0 bu kutuya bağlı. */
 .camera-stage {
   position: relative;
+  aspect-ratio: var(--camera-ar, 1.777778);
+  width: min(100cqw, calc(100cqh * var(--camera-ar, 1.777778)));
+  max-width: 100%;
+  max-height: 100%;
+  height: auto;
+  min-height: 0;
+  overflow: hidden;
+  flex-shrink: 1;
+  display: flex;
+  flex-direction: column;
+  background: #0f1410;
 }
 
 .camera-primary {
   flex: 1;
   min-height: 0;
+  width: 100%;
+  height: 100%;
   display: flex;
   flex-direction: column;
   background: #0f1410;
+  overflow: hidden;
 }
 
 .camera-primary__feed,
@@ -723,6 +933,7 @@
   min-height: 0;
   width: 100%;
   height: 100%;
+  max-height: 100%;
 }
 
 .camera-feed {
@@ -740,7 +951,10 @@
   display: block;
   width: 100%;
   height: 100%;
+  max-width: 100%;
+  max-height: 100%;
   object-fit: contain;
+  object-position: center;
   background: #0f1410;
 }
 
@@ -755,6 +969,8 @@
 }
 
 .map-pip-stage {
+  /* inset:0 → kamera kutusu; pointer-events:none → sürükle/tık kameraya geçsin,
+     yalnızca .map-pip { pointer-events: auto } etkileşim alsın */
   position: absolute;
   inset: 0;
   pointer-events: none;
@@ -1820,20 +2036,19 @@
   /* Harita solda, kamera sağda — aynı satırda yan yana */
   display: flex;
   flex-direction: row;
-  flex-wrap: wrap;
-  align-items: flex-start;
+  flex-wrap: nowrap; /* wrap → kamera harita altına düşmesin */
+  align-items: stretch; /* eşit yükseklik */
   gap: 14px;
   min-width: 0;
 }
 
 .engineer-page__map {
-  /* Önceki strip düzeni gibi: canvas (340/480) + padding; sütunu doldurma */
-  width: fit-content;
+  flex: 1 1 0;
+  min-width: 0;
   max-width: 100%;
   height: fit-content;
   max-height: 100%;
-  align-self: flex-start;
-  justify-self: start;
+  align-self: stretch;
   display: flex;
   flex-direction: column;
   padding: 16px;
@@ -1842,8 +2057,9 @@
 }
 
 .engineer-page__camera {
-  /* width/height EngineerPage'den sabit px (harita kartı offsetWidth/Height) */
-  flex: none;
+  /* Genişlik flex ile haritayla eşit; yükseklik EngineerPage inline (mapCardSize.height) */
+  flex: 1 1 0;
+  min-width: 0;
   box-sizing: border-box;
   overflow: hidden;
   display: flex;
@@ -1851,8 +2067,8 @@
   padding: 16px;
   gap: 8px;
   max-width: 100%;
-  min-width: 0;
   min-height: 0;
+  max-height: 100%;
 }
 
 .engineer-page__camera .panel-card__title--compact {
@@ -1862,15 +2078,16 @@
 
 .engineer-page__camera-feed,
 .engineer-page__camera .camera-feed {
-  /* Kutu boyutu sabit; görüntü kutuyu büyütmez */
-  flex: 1 1 auto;
+  /* Kalan yüksekliği doldur; içerik boyutu (intrinsic img) kutuyu büyütmesin */
+  flex: 1 1 0;
   width: 100%;
   min-height: 0;
-  height: auto;
+  height: 0;
   overflow: hidden;
   border-radius: var(--radius-md);
   border: 1px solid var(--color-border);
   box-sizing: border-box;
+  position: relative;
 }
 
 .engineer-page__camera .camera-feed__img {
@@ -1878,6 +2095,7 @@
   width: 100%;
   height: 100%;
   object-fit: contain;
+  object-position: center;
 }
 
 .engineer-page__camera .camera-feed--offline {
@@ -1912,6 +2130,7 @@
 }
 
 .engineer-page__side-main {
+  /* Görevler | Ayarlar yan yana — üç eşit sütunda kart sıkışıp kaybolmasın */
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 18px;
@@ -1922,6 +2141,8 @@
 .engineer-mini-map {
   position: relative;
   flex-shrink: 0;
+  /* Kart iç genişliğini doldur (ResizeObserver + canvas width eşleşsin) */
+  width: 100%;
   overflow: hidden;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -1931,7 +2152,10 @@
 .engineer-mini-map-wrap {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: stretch;
+  /* Observer hedefi: padding sonrası gerçek içerik genişliği */
+  width: 100%;
+  min-width: 0;
   gap: 4px;
 }
 

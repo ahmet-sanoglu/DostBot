@@ -1,6 +1,8 @@
 // Mühendis panelindeki küçük canlı harita — robot, geofence ve yasak dikdörtgen çizimi.
 // Geofence (drawMode): çoklu köşe poligon; yasak bölge (forbiddenDrawMode): tam 2 tık = 1 dikdörtgen.
 // İki mod ayrı state — aynı tıklama dinleyicisinde karışmasın, biri açılınca diğeri kapansın diye.
+// Genişlik: sabit 340px değil — ResizeObserver ile kart clientWidth; kamera yanına eklenince
+// kart genişleyince canvas sağda boşluk bırakmasın (MapView gibi container'a uysun).
 
 import React, { useEffect, useRef, useState } from 'react';
 import { Topic } from 'roslib';
@@ -21,8 +23,6 @@ import {
 const MAP_METADATA_URL = 'http://localhost:5000/api/map/metadata';
 const MAP_IMAGE_URL = 'http://localhost:5000/api/map/image';
 const ODOMETRY_TOPIC = '/odometry/filtered_uwb';
-const MINI_MAP_WIDTH = 340;
-const DRAW_MAP_WIDTH = 480;
 
 /** Canvas tıklamasını dünya koordinatına çevirir (geofence / yasak bölge köşe için). */
 function canvasToWorld(canvasX, canvasY, mapMeta, imageObj, canvasWidth, canvasHeight) {
@@ -170,6 +170,7 @@ export default function EngineerMiniMap({
   onForbiddenCornerClick,
 }) {
   const canvasRef = useRef(null);
+  const containerRef = useRef(null);
   const layoutRef = useRef(null);
   const smoothedPoseRef = useRef(null);
   const { ros } = useRos();
@@ -178,13 +179,14 @@ export default function EngineerMiniMap({
   const [imageObj, setImageObj] = useState(null);
   const [robotPose, setRobotPose] = useState(null);
   const [loadError, setLoadError] = useState(null);
-  const [mapHeight, setMapHeight] = useState(Math.round(MINI_MAP_WIDTH * 0.75));
+  // Kart iç genişliği (ResizeObserver); sabit 340px karttan küçük kalıp sağda boşluk bırakıyordu
+  const [mapWidth, setMapWidth] = useState(0);
+  const [mapHeight, setMapHeight] = useState(0);
   const [previewCorner, setPreviewCorner] = useState(null);
   // Son tıklanan — bilgi satırı; drawMode/forbiddenDrawMode köşe eklemeyi değiştirmez, üzerine eklenir.
   const [lastClickedWorldPos, setLastClickedWorldPos] = useState(null);
 
   const anyDrawMode = drawMode || forbiddenDrawMode;
-  const mapWidth = anyDrawMode ? DRAW_MAP_WIDTH : MINI_MAP_WIDTH;
 
   useEffect(() => {
     fetch(MAP_METADATA_URL)
@@ -204,8 +206,25 @@ export default function EngineerMiniMap({
     img.src = MAP_IMAGE_URL;
   }, []);
 
+  // Kart (wrap) clientWidth → canvas; çizim modunda kart genişleyince yeniden ölçülür
   useEffect(() => {
-    if (!imageObj) return;
+    const el = containerRef.current;
+    if (!el) return undefined;
+
+    const syncWidth = () => {
+      const width = Math.floor(el.clientWidth);
+      if (width <= 0) return;
+      setMapWidth((prev) => (prev === width ? prev : width));
+    };
+
+    syncWidth();
+    const observer = new ResizeObserver(syncWidth);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [anyDrawMode]);
+
+  useEffect(() => {
+    if (!imageObj || mapWidth <= 0) return;
     setMapHeight(computeRotatedCanvasHeight(imageObj, mapWidth));
   }, [imageObj, mapWidth]);
 
@@ -244,7 +263,7 @@ export default function EngineerMiniMap({
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !imageObj || !mapMeta) return;
+    if (!canvas || !imageObj || !mapMeta || mapWidth <= 0 || mapHeight <= 0) return;
 
     canvas.width = mapWidth;
     canvas.height = mapHeight;
@@ -387,10 +406,10 @@ export default function EngineerMiniMap({
   }
 
   return (
-    <div className="engineer-mini-map-wrap">
+    <div className="engineer-mini-map-wrap" ref={containerRef}>
       <div
         className={`engineer-mini-map${anyDrawMode ? ' engineer-mini-map--draw' : ''}`}
-        style={{ width: mapWidth, height: mapHeight }}
+        style={mapWidth > 0 && mapHeight > 0 ? { width: mapWidth, height: mapHeight } : undefined}
       >
         {loadError && (
           <p className="engineer-mini-map__error">{loadError}</p>
@@ -398,16 +417,18 @@ export default function EngineerMiniMap({
         {hintText && (
           <p className="engineer-mini-map__hint">{hintText}</p>
         )}
-        <canvas
-          ref={canvasRef}
-          className="engineer-mini-map__canvas"
-          width={mapWidth}
-          height={mapHeight}
-          onClick={handleCanvasClick}
-          onDoubleClick={handleDoubleClick}
-          onMouseMove={handleMouseMove}
-          onMouseLeave={handleMouseLeave}
-        />
+        {mapWidth > 0 && mapHeight > 0 && (
+          <canvas
+            ref={canvasRef}
+            className="engineer-mini-map__canvas"
+            width={mapWidth}
+            height={mapHeight}
+            onClick={handleCanvasClick}
+            onDoubleClick={handleDoubleClick}
+            onMouseMove={handleMouseMove}
+            onMouseLeave={handleMouseLeave}
+          />
+        )}
       </div>
       {lastClickedWorldPos && (
         <p className="autonomous-panel__meta map-click-coord">

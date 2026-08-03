@@ -1,6 +1,9 @@
 // Operatör panelindeki navigasyon akışını yönetir: hedef gönderme, görev kuyruğu, durum metni.
 // Hedefler nav_relay.py üzerinden Nav2'ye gider; durum /agrifleet/nav_status JSON ile gelir.
 // Nav2'ye tek seferde bir hedef; her adıma varınca step action, sonra sıradaki adım.
+// skipNextIdleEventRef: görev bitiş idle'sı sonraki görevin Adım1→2 geçişini yutmasın diye
+// startTask/sendNavigationGoal başında sıfırlanır (queueBusy zaten false iken bayrak kilitlenirdi).
+// Görev geçmişi: runId ile başlat/bitir POST'ları bağlanır; 'Hedef' fallback yazılmaz.
 
 import React, {
   createContext,
@@ -19,12 +22,18 @@ import {
 } from '../utils/rosNavigation';
 import { startCoverageTask } from '../utils/coverageAction';
 import { appendMapTaskHistory, fetchActiveMap } from '../utils/mapApi';
+import {
+  publishNavSnapshot,
+  publishTaskHistoryUpdated,
+} from '../utils/navigationBroadcast';
 
 /** accepted hiç gelmezse (röle yok / bag) kısa kaçış; UI sonsuza kadar meşgul kalmasın diye. */
 const NAV_BUSY_MS = 10000;
 /** accepted geldiyse röle çalışıyor demektir; bundan sonra yalnızca gerçek takılma için son çare. */
 const NAV_ACCEPTED_SAFETY_MS = 120000;
 const MAX_EVENTS = 10;
+/** Geçmiş sayfasını yenileyecek terminal kayıt durumları. */
+const HISTORY_TERMINAL_STATUSES = new Set(['başarılı', 'iptal edildi', 'başarısız']);
 
 /** action_msgs/GoalStatus — röle result.status alanıyla aynı. */
 const NAV_RESULT_SUCCEEDED = 4;
@@ -149,11 +158,44 @@ export function NavigationProvider({ children }) {
   const historyStartLoggedRef = useRef(false);
   // Acil dur zaten iptal kaydı yazdıysa CANCELED result çift satır üretmesin
   const historySkipNextCancelRef = useRef(false);
+  // Aynı run'ın başlatıldı + terminal POST'larını bağlar (FIFO off-by-one önler)
+  const currentRunIdRef = useRef(null);
   const lastSentGoalRef = useRef(null);
+  // Görev geçmişi sekmesi için: busy başladığı an (activeTask.startedAt yoksa)
+  const navStartedAtRef = useRef(null);
 
   const isConnected = status === ROS_CONNECTED_STATUS;
 
   queueBusyRef.current = queueBusy;
+
+  // Görev Geçmişi yeni sekmede — canlı "Devam Ediyor" + bitişte liste yenileme için yayın
+  useEffect(() => {
+    if (!queueBusy) {
+      navStartedAtRef.current = null;
+    }
+    publishNavSnapshot({
+      queueBusy,
+      activeTaskProgress,
+      lastSentGoal,
+      navStartedAt: activeTaskProgress?.startedAt || navStartedAtRef.current,
+    });
+  }, [queueBusy, activeTaskProgress, lastSentGoal]);
+
+  // busy → idle: geçmiş sekmesi GET yenilesin (POST ile yarışmasın diye kısa gecikme)
+  const wasQueueBusyRef = useRef(false);
+  useEffect(() => {
+    if (wasQueueBusyRef.current && !queueBusy) {
+      const timer = window.setTimeout(() => {
+        publishTaskHistoryUpdated({ status: 'idle' });
+      }, 450);
+      wasQueueBusyRef.current = false;
+      return () => window.clearTimeout(timer);
+    }
+    if (queueBusy) {
+      wasQueueBusyRef.current = true;
+    }
+    return undefined;
+  }, [queueBusy]);
 
   const clearBusyTimer = useCallback(() => {
     if (busyTimerRef.current) {
@@ -187,7 +229,8 @@ export function NavigationProvider({ children }) {
     setRecentEvents((prev) => [entry, ...prev].slice(0, MAX_EVENTS));
   }, []);
 
-  /** Aktif görev veya son hedef etiketinden geçmiş kaydı için isim. */
+  /** Aktif görev veya son hedef etiketinden geçmiş kaydı için isim.
+   *  'Hedef' = gerçek görev adı yok (fallback); logTaskHistory bu değeri yazmaz. */
   const resolveHistoryTaskName = useCallback(() => {
     const active = activeTaskRef.current;
     if (active?.taskName) return active.taskName;
@@ -203,9 +246,25 @@ export function NavigationProvider({ children }) {
    * Görev geçmişi POST — fire-and-forget.
    * Neden ayrı? Nav accepted/result akışını bozmadan denetim izi; hata olursa
    * yalnızca console.warn, queueBusy/step zinciri etkilenmez.
+   * runId: başlatıldı'da yeni UUID; terminal'de aynı id — backend FIFO yerine buna göre birleştirir.
    */
   const logTaskHistory = useCallback((status, taskName) => {
     const name = (taskName && String(taskName).trim()) || resolveHistoryTaskName();
+    // Sahte kayıt: activeTask yok + source yok → fallback 'Hedef'; hiç yazma
+    if (!name || name === 'Hedef') return;
+
+    let runId = currentRunIdRef.current;
+    if (status === 'başlatıldı') {
+      runId = crypto.randomUUID();
+      currentRunIdRef.current = runId;
+    } else {
+      // Terminal: start ile aynı runId; yoksa (accepted öncesi estop) yine benzersiz id
+      if (!runId) {
+        runId = crypto.randomUUID();
+      }
+      currentRunIdRef.current = null; // bir daha kullanılmasın
+    }
+
     void (async () => {
       try {
         let mapId = historyMapIdRef.current;
@@ -219,7 +278,12 @@ export function NavigationProvider({ children }) {
           taskName: name,
           status,
           timestamp: historyTimestamp(),
+          runId,
         });
+        // POST bitti → açık Görev Geçmişi sekmesi Tamamlandı/İptal listesini çeksin
+        if (HISTORY_TERMINAL_STATUSES.has(status)) {
+          publishTaskHistoryUpdated({ status, taskName: name });
+        }
       } catch (err) {
         console.warn('[taskHistory] kayıt gönderilemedi:', err);
       }
@@ -238,6 +302,9 @@ export function NavigationProvider({ children }) {
     resetRecoveryState();
     // Katman 1: kısa fallback. Röle hiç çalışmıyorsa / accepted gelmiyorsa bag testinde çıkış yolu bu.
     // accepted gelirse bu 10 sn timer uzun güvenlik ağıyla değiştirilecek.
+    if (!navStartedAtRef.current) {
+      navStartedAtRef.current = historyTimestamp();
+    }
     setQueueBusy(true);
     startBusyTimer(NAV_BUSY_MS);
 
@@ -466,6 +533,7 @@ export function NavigationProvider({ children }) {
       totalSteps: steps.length,
       stepActionLabel: null,
       steps,
+      startedAt: historyTimestamp(),
     };
 
     activeTaskRef.current = progress;
@@ -495,7 +563,6 @@ export function NavigationProvider({ children }) {
       if (!message || typeof message.type !== 'string') return;
 
       if (message.type === 'accepted') {
-        console.log('[navStatus] accepted');
         // Katman 2: accepted, nav_relay'in gerçekten canlı olduğunu kanıtlar. Bu noktadan sonra
         // 10 sn fallback erken "Hazır" üretmemeli; onun yerine yalnızca robot tamamen takılırsa
         // devreye girecek 120 sn uzun güvenlik ağına geçilir.
@@ -547,7 +614,6 @@ export function NavigationProvider({ children }) {
         if (!queueBusyRef.current) return;
 
         const resultStatus = message.status;
-        console.log('[navStatus] result status:', resultStatus);
         clearBusyTimer();
         setNavDistanceRemaining(null);
         resetRecoveryState();

@@ -18,6 +18,13 @@ export async function fetchActiveMap() {
   return fetchJson(`${API_BASE}/api/maps/active`);
 }
 
+/** Kamera kaynağı: { mode: 'sim' | 'real' }.
+ * Neden endpoint? CAMERA_MODE yalnızca sunucu .env'de; tarayıcıya URL hardcode etmeyelim.
+ */
+export async function fetchCameraMode() {
+  return fetchJson(`${API_BASE}/api/camera/mode`);
+}
+
 /** Tüm harita kayıtlarını listeler (aktif + pasif) — mühendis paneli seçici için. */
 export async function fetchMaps() {
   return fetchJson(`${API_BASE}/api/maps`);
@@ -28,13 +35,16 @@ export async function fetchMapTasks(mapId) {
   return fetchJson(`${API_BASE}/api/maps/${encodeURIComponent(mapId)}/tasks`);
 }
 
-/** Görev geçmişi — modal listesi; backend zaten yeni→eski sıralar. */
+/** Görev geçmişi — birleşik run listesi (GET).
+ * Neden birleşik? Ham başlatıldı/başarılı satırları UI'da tek kart olarak gösterilsin.
+ */
 export async function fetchMapTaskHistory(mapId) {
   return fetchJson(`${API_BASE}/api/maps/${encodeURIComponent(mapId)}/task-history`);
 }
 
 /**
  * Navigasyon yan kaydı POST — accepted/result sonrası.
+ * Gövde: { taskName, status, timestamp, runId? } — runId başlatıldı+terminal'i bağlar.
  * Neden mapApi'de? NavigationContext await etmeden çağırır; nav state'e karışmaz.
  */
 export async function appendMapTaskHistory(mapId, entry) {

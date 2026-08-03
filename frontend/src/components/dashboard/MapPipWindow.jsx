@@ -5,7 +5,7 @@
 // (pencere ekran dışına kaymasın / alışılmış OS resize davranışı).
 // Min/max: çok küçük kullanılamaz, çok büyük kamerayı tamamen örtmesin.
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 const PIP_DEFAULT_WIDTH = 280;
 const PIP_DEFAULT_HEIGHT = 200;
@@ -23,22 +23,65 @@ const RESIZE_HANDLES = [
   { id: 'bottom-right', cursor: 'nwse-resize', icon: '↘' },
 ];
 
-/** Snap hedefi: serbest konum yok; bırakınca yalnızca bu 4 noktaya oturur. */
-function positionForCorner(corner, containerWidth, containerHeight, pipW, pipH) {
-  const maxLeft = Math.max(PIP_MARGIN, containerWidth - pipW - PIP_MARGIN);
-  const maxTop = Math.max(PIP_MARGIN, containerHeight - pipH - PIP_MARGIN);
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
 
+/** Sahne içinde kalacak max PiP boyutu (%50 tavan, sahneyi aşmaz). */
+function maxPipSizeForStage(stageW, stageH) {
+  if (stageW <= 0 || stageH <= 0) {
+    return { width: PIP_DEFAULT_WIDTH, height: PIP_DEFAULT_HEIGHT };
+  }
+  return {
+    width: Math.min(stageW, Math.max(PIP_MIN_WIDTH, Math.floor(stageW * 0.5))),
+    height: Math.min(stageH, Math.max(PIP_MIN_HEIGHT, Math.floor(stageH * 0.5))),
+  };
+}
+
+/** İstenen boyutu sahneye sığdır — varsayılan/reset ile snap tutarlı kalsın. */
+function fitPipSizeToStage(width, height, stageW, stageH) {
+  const max = maxPipSizeForStage(stageW, stageH);
+  return {
+    width: clamp(width, Math.min(PIP_MIN_WIDTH, max.width), max.width),
+    height: clamp(height, Math.min(PIP_MIN_HEIGHT, max.height), max.height),
+  };
+}
+
+/** Snap hedefi: serbest konum yok; bırakınca yalnızca bu 4 noktaya oturur.
+ * left/top her zaman sahne içinde: 0..stageW-pipW, 0..stageH-pipH (taşma yok).
+ */
+function positionForCorner(corner, containerWidth, containerHeight, pipW, pipH) {
+  const maxLeft = Math.max(0, containerWidth - pipW);
+  const maxTop = Math.max(0, containerHeight - pipH);
+
+  let left;
+  let top;
   switch (corner) {
     case 'top-left':
-      return { left: PIP_MARGIN, top: PIP_MARGIN };
+      left = PIP_MARGIN;
+      top = PIP_MARGIN;
+      break;
     case 'top-right':
-      return { left: maxLeft, top: PIP_MARGIN };
+      left = containerWidth - pipW - PIP_MARGIN;
+      top = PIP_MARGIN;
+      break;
     case 'bottom-left':
-      return { left: PIP_MARGIN, top: maxTop };
+      left = PIP_MARGIN;
+      top = containerHeight - pipH - PIP_MARGIN;
+      break;
     case 'bottom-right':
     default:
-      return { left: maxLeft, top: maxTop };
+      left = containerWidth - pipW - PIP_MARGIN;
+      top = containerHeight - pipH - PIP_MARGIN;
+      break;
   }
+
+  // Büyümüş PiP + margin: max(PIP_MARGIN, stage-pip-margin) taşımayı önlemezdi;
+  // son adımda mutlaka sahne dikdörtgenine sıkıştır.
+  return {
+    left: clamp(left, 0, maxLeft),
+    top: clamp(top, 0, maxTop),
+  };
 }
 
 /** Merkeze en yakın köşe — bırakınca "yapışma" hissi. */
@@ -58,10 +101,6 @@ function nearestCorner(centerX, centerY, containerWidth, containerHeight, pipW, 
   }
 
   return best;
-}
-
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value));
 }
 
 /**
@@ -178,44 +217,54 @@ export default function MapPipWindow({ children }) {
   }, []);
 
   const getMaxPipSize = useCallback(() => {
-    // %50 tavan: PiP kameranın tamamını örtmesin
     const { width, height } = getContainerSize();
-    return {
-      width: Math.max(PIP_MIN_WIDTH, Math.floor(width * 0.5)),
-      height: Math.max(PIP_MIN_HEIGHT, Math.floor(height * 0.5)),
-    };
+    return maxPipSizeForStage(width, height);
   }, [getContainerSize]);
 
-  useEffect(() => {
+  // İlk mount + sahne boyutu değişince: varsayılan/reset boyutu sahneye sığdır
+  // (PIP_DEFAULT, stage'den büyükse konum clamp yetmez — taşma devam ederdi)
+  useLayoutEffect(() => {
     const el = stageRef.current;
     if (!el) return undefined;
-    const observer = new ResizeObserver(() => {
+
+    const syncToStage = () => {
       setSizeTick((n) => n + 1);
-      const max = {
-        width: Math.max(PIP_MIN_WIDTH, Math.floor(el.clientWidth * 0.5)),
-        height: Math.max(PIP_MIN_HEIGHT, Math.floor(el.clientHeight * 0.5)),
-      };
+      const stageW = el.clientWidth;
+      const stageH = el.clientHeight;
+      if (stageW <= 0 || stageH <= 0) return;
       setPipSize((prev) => {
-        const next = {
-          width: Math.min(prev.width, max.width),
-          height: Math.min(prev.height, max.height),
-        };
+        const next = fitPipSizeToStage(prev.width, prev.height, stageW, stageH);
         if (next.width === prev.width && next.height === prev.height) return prev;
         return next;
       });
-    });
+    };
+
+    syncToStage();
+    const observer = new ResizeObserver(syncToStage);
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
 
   const { width: stageW, height: stageH } = getContainerSize();
-  const snappedPos = stageW && stageH
-    ? positionForCorner(corner, stageW, stageH, pipSize.width, pipSize.height)
+  // Render anında da boyutu sığdır — ilk paint observer'dan önce taşmasın
+  const fittedSize = (stageW > 0 && stageH > 0)
+    ? fitPipSizeToStage(pipSize.width, pipSize.height, stageW, stageH)
+    : pipSize;
+  const snappedPos = stageW > 0 && stageH > 0
+    ? positionForCorner(corner, stageW, stageH, fittedSize.width, fittedSize.height)
     : { left: PIP_MARGIN, top: PIP_MARGIN };
 
   let displayPos = snappedPos;
   if (resizing && resizePos) displayPos = resizePos;
   else if (dragging && dragPos) displayPos = dragPos;
+
+  // Sürükleme/resize anlık konumu da sahne dışında kalmasın
+  if (stageW > 0 && stageH > 0) {
+    displayPos = {
+      left: clamp(displayPos.left, 0, Math.max(0, stageW - fittedSize.width)),
+      top: clamp(displayPos.top, 0, Math.max(0, stageH - fittedSize.height)),
+    };
+  }
 
   const handleMoveMouseDown = (event) => {
     if (event.button !== 0) return;
@@ -379,8 +428,8 @@ export default function MapPipWindow({ children }) {
       <div
         className={`map-pip${dragging ? ' map-pip--dragging' : ''}${resizing ? ' map-pip--resizing' : ''}`}
         style={{
-          width: pipSize.width,
-          height: pipSize.height,
+          width: fittedSize.width,
+          height: fittedSize.height,
           left: displayPos.left,
           top: displayPos.top,
         }}

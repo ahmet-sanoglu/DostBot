@@ -1,9 +1,11 @@
 // Operatör Kontrol Paneli ana sayfası — birincil kamera + PiP harita, sağ kontrol kartları.
 // Görev başlatmadan önce isWorldGoalPassable ile hedef doğrulanır.
+// Kamera stage oranı: onFrameAspect → --camera-ar; object-fit:contain siyah barları azalır.
+// PiP .camera-stage'e absolute bağlanır — stage viewport'u aşmasın (snap görünür kalsın).
 
 import React, { useCallback, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import CameraFeed from '../components/CameraFeed';
+import CameraFeed, { CAMERA_DEFAULT_ASPECT } from '../components/CameraFeed';
 import MapView from '../components/MapView';
 import ControlPanel from '../components/dashboard/ControlPanel';
 import MapPipWindow from '../components/dashboard/MapPipWindow';
@@ -34,6 +36,14 @@ export default function DashboardPage() {
     startTask,
   } = useNavigation();
   const [showInvalidGoalPopup, setShowInvalidGoalPopup] = useState(false);
+  // object-fit:contain siyah barlarını azalt: stage oranı ≈ kare oranı (varsayılan 16:9 waffle_pi)
+  const [cameraAspect, setCameraAspect] = useState(CAMERA_DEFAULT_ASPECT);
+
+  const handleFrameAspect = useCallback(({ aspect }) => {
+    if (typeof aspect === 'number' && aspect > 0 && Number.isFinite(aspect)) {
+      setCameraAspect(aspect);
+    }
+  }, []);
 
   /**
    * Görev Başlat öncesi geofence zinciri (isWorldGoalPassable / mapPassability.js):
@@ -67,15 +77,23 @@ export default function DashboardPage() {
 
   return (
     <div className={`main-content${showDebugTelemetry ? ' main-content--debug' : ''}`}>
-      <div className="map-column camera-stage">
-        <div className="camera-primary">
-          <CameraFeed className="camera-primary__feed" />
-        </div>
-        <MapPipWindow>
-          <div className="map-panel map-panel--pip">
-            <MapView />
+      <div className="map-column map-column--camera">
+        <div
+          className="camera-stage"
+          style={{ '--camera-ar': cameraAspect }}
+        >
+          <div className="camera-primary">
+            <CameraFeed
+              className="camera-primary__feed"
+              onFrameAspect={handleFrameAspect}
+            />
           </div>
-        </MapPipWindow>
+          <MapPipWindow>
+            <div className="map-panel map-panel--pip">
+              <MapView />
+            </div>
+          </MapPipWindow>
+        </div>
       </div>
 
       <ControlPanel
