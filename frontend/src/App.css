@@ -100,13 +100,15 @@
 .workspace__content {
   flex: 1;
   min-height: 0;
-  overflow: hidden;
-  padding: 0 24px;
+  /* Tek sayfa scroll — Kontrol Paneli (kamera+panel) birlikte kayar */
+  overflow-x: hidden;
+  overflow-y: auto;
+  /* Alt nefes; kamera bütçesiyle uyumlu (birlikte büyütüldü / küçültüldü) */
+  padding: 0 24px 28px;
   position: relative;
-  /* Flex column: main-content height:100% işlesin — kamera img sütunu 100vh dışına şişmesin
-     (PiP inset:0 o taşmış alanın altına snap ediyordu) */
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
 }
 
 /* ── Status banner ── */
@@ -147,6 +149,7 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+  /* Sadece Görevler kartı — uzun liste kart içinde kayar, sayfayı uzatmaz */
   max-height: 320px;
   overflow-y: auto;
 }
@@ -301,86 +304,6 @@
 .manual-drive__velocity {
   margin-top: 4px;
   font-variant-numeric: tabular-nums;
-}
-
-.panel-card--events {
-  flex-shrink: 0;
-  padding-bottom: 8px;
-  margin-bottom: 4px;
-}
-
-.panel-card--events .recent-events {
-  width: 100%;
-}
-
-/* ── Recent events (in-panel accordion) ── */
-.recent-events {
-  position: static;
-  width: 100%;
-  min-width: 0;
-  max-width: none;
-  background: transparent;
-  border: none;
-  border-radius: 0;
-  box-shadow: none;
-  overflow: visible;
-}
-
-.recent-events__toggle {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  padding: 0 0 10px;
-  border: none;
-  background: transparent;
-  color: var(--color-text-muted);
-  font-family: var(--font-sans);
-  font-size: 0.75rem;
-  font-weight: var(--font-weight-medium);
-  letter-spacing: 0.02em;
-  cursor: pointer;
-  text-align: left;
-  transition: all 0.2s ease;
-}
-
-.recent-events__toggle:hover {
-  color: var(--color-text-primary);
-}
-
-.recent-events__list {
-  list-style: none;
-  margin: 0;
-  padding: 0 0 4px;
-  max-height: 180px;
-  overflow-y: auto;
-}
-
-.recent-events__item {
-  padding: 8px 0;
-  font-size: 0.8125rem;
-  line-height: 1.45;
-  color: var(--color-text-secondary);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.recent-events__item:last-child {
-  border-bottom: none;
-}
-
-.recent-events__item--empty {
-  font-style: italic;
-  color: var(--color-text-muted);
-  border-bottom: none;
-}
-
-.recent-events__time {
-  font-variant-numeric: tabular-nums;
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-}
-
-.recent-events__message {
-  color: var(--color-text-secondary);
 }
 
 .status-banner {
@@ -547,15 +470,19 @@
   filter: none;
 }
 
-/* ── Main content: map + side panel ── */
+/* ── Main content: map + side panel ──
+ * height:auto + min-height:100% — viewport'u doldurur ama içeriğe göre uzar;
+ * tek scroll .workspace__content'te (sağ panel iç scroll yok). */
 .main-content {
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--layout-panel-width);
-  flex: 1;
-  min-height: 0;
-  height: 100%;
-  overflow: hidden;
+  flex: 1 0 auto;
+  min-height: 100%;
+  height: auto;
+  overflow: visible;
+  align-items: start;
   background: var(--color-bg);
+  box-sizing: border-box;
 }
 
 .main-content--debug {
@@ -882,45 +809,53 @@
 .map-column {
   min-width: 0;
   min-height: 0;
-  height: 100%;
-  max-height: 100%;
+  height: auto;
+  max-height: none;
   display: flex;
   flex-direction: column;
   position: relative;
+  overflow: visible;
+}
+
+/* Kontrol Paneli kamera sütunu: dikey bütçe aynı (ilk açılışta sığma).
+ * Kart yatayda sütunun tamamını doldurur (sağ panel hariç). */
+.map-column--camera {
+  --camera-viewport-budget: calc(100dvh - var(--layout-top-bar-height) - 28px);
+  height: var(--camera-viewport-budget);
+  max-height: var(--camera-viewport-budget);
+  align-items: stretch;
+  justify-content: stretch;
+  background: transparent;
   overflow: hidden;
 }
 
-/* Kontrol Paneli: sütun hücreyi doldurur; .camera-stage oranı kareye uyar (cq). */
-.map-column--camera {
-  align-items: center;
-  justify-content: center;
-  container-type: size;
-  background: #0f1410;
-}
-
-/* Kamera birincil + PiP.
- * --camera-ar: img naturalWidth/Height (varsayılan 16/9). Kutu sütuna sığar,
- * object-fit:contain letterbox minimuma iner. PiP inset:0 bu kutuya bağlı. */
+/* Kamera kartı: width %100 (sol sütun); yükseklik sütun bütçesi — dikeye dokunma.
+ * Görüntü object-fit:cover ile çerçeveyi doldurur (siyah bar yok, kenar kırpılabilir). */
 .camera-stage {
   position: relative;
-  aspect-ratio: var(--camera-ar, 1.777778);
-  width: min(100cqw, calc(100cqh * var(--camera-ar, 1.777778)));
+  width: 100%;
   max-width: 100%;
+  height: 100%;
   max-height: 100%;
-  height: auto;
   min-height: 0;
   overflow: hidden;
-  flex-shrink: 1;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  background: #0f1410;
+  box-sizing: border-box;
 }
 
-.camera-primary {
+/* Kart padding içinde video kuyusu — letterbox #0f1410 kalsın, çerçeve elevated */
+.camera-stage.panel-card .camera-primary {
+  border-radius: calc(var(--radius-lg) - 4px);
   flex: 1;
   min-height: 0;
   width: 100%;
   height: 100%;
+  aspect-ratio: auto;
+}
+
+.camera-primary {
   display: flex;
   flex-direction: column;
   background: #0f1410;
@@ -933,7 +868,6 @@
   min-height: 0;
   width: 100%;
   height: 100%;
-  max-height: 100%;
 }
 
 .camera-feed {
@@ -947,12 +881,15 @@
   background: #121814;
 }
 
+.camera-stage .camera-feed__img {
+  /* Kontrol Paneli: cover — kutu dolsun, kenarlar hafif kırpılabilir; contain bar yok */
+  object-fit: cover;
+}
+
 .camera-feed__img {
   display: block;
   width: 100%;
   height: 100%;
-  max-width: 100%;
-  max-height: 100%;
   object-fit: contain;
   object-position: center;
   background: #0f1410;
@@ -1179,14 +1116,14 @@
 .control-panel {
   flex-shrink: 0;
   min-height: 0;
-  max-height: calc(100vh - var(--layout-top-bar-height));
-  height: calc(100vh - var(--layout-top-bar-height));
+  /* İç scroll yok — tüm sayfa .workspace__content ile kayar */
+  height: auto;
+  max-height: none;
+  align-self: start;
   display: flex;
   flex-direction: column;
   gap: 20px;
-  overflow-y: auto;
-  overflow-x: hidden;
-  overscroll-behavior: contain;
+  overflow: visible;
   background: var(--color-bg);
   border-left: 1px solid var(--color-border);
 }
@@ -1204,12 +1141,6 @@
 
 .control-panel .panel-card {
   padding: 22px 24px;
-}
-
-.panel-card--events {
-  flex-shrink: 0;
-  padding-bottom: 8px;
-  margin-bottom: 4px;
 }
 
 /* ── Shared panel cards ── */
@@ -1848,12 +1779,11 @@
   display: flex;
   flex-direction: column;
   gap: 18px;
-  /* workspace__content overflow:hidden — sabit 100vh yerine height:100% + overflow-y:auto;
-     içerik (yasak bölge formu vb.) uzayınca sayfa kayabilsin, parent clip etmesin. */
+  /* workspace__content zaten yatay 24px padding — çift kenar boşluğu olmasın (Kontrol Paneli ile tutarlı) */
   box-sizing: border-box;
   height: 100%;
   min-height: 0;
-  padding: 24px;
+  padding: 20px 0 0;
   overflow-x: hidden;
   overflow-y: auto;
   background: var(--color-bg-subtle);
@@ -2023,78 +1953,92 @@
 }
 
 .engineer-page__body {
-  /* Dashboard .main-content gibi: sol görseller | sağ panel bloğu */
+  /* Neden yan yana: harita/kamera ana görsel; görev/ayar sağda dar sütun — alt şerit boşluğu yok */
   flex: 1;
   min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 1fr);
-  gap: 18px;
-  align-items: stretch;
-}
-
-.engineer-page__visuals {
-  /* Harita solda, kamera sağda — aynı satırda yan yana */
   display: flex;
   flex-direction: row;
-  flex-wrap: nowrap; /* wrap → kamera harita altına düşmesin */
-  align-items: stretch; /* eşit yükseklik */
-  gap: 14px;
-  min-width: 0;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 18px;
 }
 
-.engineer-page__map {
-  flex: 1 1 0;
-  min-width: 0;
-  max-width: 100%;
-  height: fit-content;
-  max-height: 100%;
-  align-self: stretch;
+.engineer-page__workspace {
   display: flex;
   flex-direction: column;
-  padding: 16px;
-  overflow: auto;
+  gap: 0;
+  min-width: 0;
+  width: 100%;
+  max-width: calc(480px * 2 + 18px);
+  flex: 0 1 auto;
+}
+
+/* Neden eşit sütun + 16:9: Harita ve Kamera kartları matematiksel aynı kutu */
+.engineer-page__media {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 480px));
+  gap: 18px;
+  align-items: stretch;
+  width: 100%;
+  max-width: calc(480px * 2 + 18px);
+  min-width: 0;
   box-sizing: border-box;
 }
 
+/* Harita + Kamera: birebir aynı kutu kuralları */
+.engineer-page__media-card,
+.engineer-page__map,
 .engineer-page__camera {
-  /* Genişlik flex ile haritayla eşit; yükseklik EngineerPage inline (mapCardSize.height) */
-  flex: 1 1 0;
+  width: 100%;
   min-width: 0;
+  max-width: 100%;
+  min-height: 0;
+  height: auto;
+  max-height: none;
   box-sizing: border-box;
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  padding: 16px;
+  padding: 20px;
   gap: 8px;
-  max-width: 100%;
-  min-height: 0;
-  max-height: 100%;
+  flex-shrink: 0;
 }
 
+.engineer-page__media-card .panel-card__title--compact,
+.engineer-page__map .panel-card__title--compact,
 .engineer-page__camera .panel-card__title--compact {
   margin-bottom: 0;
   flex-shrink: 0;
 }
 
+/* İç viewport: kamera cover (kutu dolsun); harita contain (kırpılmasın) — bilerek farklı */
 .engineer-page__camera-feed,
-.engineer-page__camera .camera-feed {
-  /* Kalan yüksekliği doldur; içerik boyutu (intrinsic img) kutuyu büyütmesin */
-  flex: 1 1 0;
+.engineer-page__camera .camera-feed,
+.engineer-page__map .engineer-mini-map-wrap {
   width: 100%;
+  aspect-ratio: 16 / 9;
+  height: auto;
+  flex: none;
   min-height: 0;
-  height: 0;
   overflow: hidden;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--color-border);
+  border-radius: calc(var(--radius-lg) - 6px);
+  border: 0.5px solid var(--color-border);
   box-sizing: border-box;
   position: relative;
+}
+
+.engineer-page__map .engineer-mini-map-wrap {
+  display: block;
+  padding: 0;
+  gap: 0;
+  background: #f8fafc;
 }
 
 .engineer-page__camera .camera-feed__img {
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: cover;
   object-position: center;
 }
 
@@ -2103,49 +2047,42 @@
   padding: 16px;
 }
 
-.engineer-page__map .panel-card__title--compact {
-  margin-bottom: 8px;
-  flex-shrink: 0;
-}
-
 .engineer-page__map--draw {
-  /* çizim modunda canvas 480px — kart yine fit-content */
   max-width: 100%;
 }
 
-.engineer-page__side {
-  min-width: 0;
-  min-height: 0;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+.engineer-page__manage {
+  /* Sağ ray: üst Görevler / alt Ayarlar — genişlik önceki 420px; yükseklik fit-content (boş şerit yok) */
+  display: flex;
+  flex-direction: column;
   gap: 18px;
-}
-
-.engineer-page__status {
+  align-items: stretch;
+  width: 420px;
+  max-width: 420px;
   min-width: 0;
+  box-sizing: border-box;
+  flex: 0 0 auto;
 }
 
-.engineer-page__status .panel-card {
-  height: 100%;
-}
-
-.engineer-page__side-main {
-  /* Görevler | Ayarlar yan yana — üç eşit sütunda kart sıkışıp kaybolmasın */
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 18px;
-  align-items: start;
+/* Neden fit-content: sabit height altta beyaz boşluk bırakıyordu */
+.engineer-page__manage > .engineer-list.panel-card,
+.engineer-page__manage .engineer-list--settings {
+  height: fit-content;
   min-height: 0;
+  max-height: none;
+  width: 100%;
+  box-sizing: border-box;
 }
+
 
 .engineer-mini-map {
-  position: relative;
-  flex-shrink: 0;
-  /* Kart iç genişliğini doldur (ResizeObserver + canvas width eşleşsin) */
+  position: absolute;
+  inset: 0;
   width: 100%;
+  height: 100%;
   overflow: hidden;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border: none;
+  border-radius: 0;
   background: #f8fafc;
 }
 
@@ -2153,15 +2090,24 @@
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  /* Observer hedefi: padding sonrası gerçek içerik genişliği */
   width: 100%;
   min-width: 0;
   gap: 4px;
 }
 
+/* Kart yüksekliğini bozmamak için overlay */
 .engineer-mini-map-wrap .map-click-coord {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 6px;
+  z-index: 2;
   margin: 0;
-  max-width: 100%;
+  max-width: none;
+  padding: 4px 8px;
+  font-size: 0.6875rem;
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: var(--radius-md);
 }
 
 .engineer-mini-map__canvas {
@@ -2253,7 +2199,7 @@
 }
 
 .engineer-list--settings {
-  min-height: 180px;
+  min-height: 0;
 }
 
 .engineer-list__header {
@@ -2808,18 +2754,14 @@ body.engineer-task-dragging * {
   margin-top: 4px;
 }
 
-@media (max-width: 1100px) {
-  .engineer-page__body {
-    grid-template-columns: 1fr;
-  }
-
-  .engineer-page__side-main {
-    grid-template-columns: 1fr 1fr;
-  }
-}
-
 @media (max-width: 720px) {
-  .engineer-page__side-main {
-    grid-template-columns: 1fr;
+  .engineer-page__media {
+    grid-template-columns: minmax(0, 480px);
+  }
+
+  .engineer-page__manage {
+    width: 100%;
+    max-width: 420px;
   }
 }
+

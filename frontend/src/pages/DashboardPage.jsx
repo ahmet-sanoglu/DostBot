@@ -1,7 +1,7 @@
 // Operatör Kontrol Paneli ana sayfası — birincil kamera + PiP harita, sağ kontrol kartları.
 // Görev başlatmadan önce isWorldGoalPassable ile hedef doğrulanır.
-// Kamera stage oranı: onFrameAspect → --camera-ar; object-fit:contain siyah barları azalır.
-// PiP .camera-stage'e absolute bağlanır — stage viewport'u aşmasın (snap görünür kalsın).
+// Kamera: --camera-ar + viewport bütçesi (cq) — ilk açılışta kesilmeden sığsın.
+// Kaydırma: sayfa .workspace__content; Görevler listesi kendi max-height scroll'u.
 
 import React, { useCallback, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
@@ -79,7 +79,7 @@ export default function DashboardPage() {
     <div className={`main-content${showDebugTelemetry ? ' main-content--debug' : ''}`}>
       <div className="map-column map-column--camera">
         <div
-          className="camera-stage"
+          className="camera-stage panel-card"
           style={{ '--camera-ar': cameraAspect }}
         >
           <div className="camera-primary">

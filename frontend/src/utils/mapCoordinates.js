@@ -24,7 +24,12 @@ export function getImageSize(imageObj) {
  * Noktaya uygulama sırası (API): önce rotate, sonra translate
  * → display-local: (iy, W−1−ix), her iki eksen [0, H) × [0, W)
  */
-export function getMapFitTransform(imageSize, canvasWidth, canvasHeight) {
+/**
+ * Döndürülmüş haritayı canvas'a sığdırma ölçeği.
+ * contain (varsayılan): tüm harita görünsün, kenarda boşluk olabilir.
+ * cover: canvas dolsun (kamera object-fit:cover gibi); kenarlar kırpılabilir.
+ */
+export function getMapFitTransform(imageSize, canvasWidth, canvasHeight, { cover = false } = {}) {
   const displayW = imageSize.height;
   const displayH = imageSize.width;
 
@@ -32,7 +37,9 @@ export function getMapFitTransform(imageSize, canvasWidth, canvasHeight) {
     return { fitScale: 1, centerX: 0, centerY: 0, displayW, displayH };
   }
 
-  const fitScale = Math.min(canvasWidth / displayW, canvasHeight / displayH);
+  const fitScale = cover
+    ? Math.max(canvasWidth / displayW, canvasHeight / displayH)
+    : Math.min(canvasWidth / displayW, canvasHeight / displayH);
   const centerX = (canvasWidth - displayW * fitScale) / 2;
   const centerY = (canvasHeight - displayH * fitScale) / 2;
 

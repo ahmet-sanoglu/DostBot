@@ -1,8 +1,8 @@
 // Mühendis panelindeki küçük canlı harita — robot, geofence ve yasak dikdörtgen çizimi.
 // Geofence (drawMode): çoklu köşe poligon; yasak bölge (forbiddenDrawMode): tam 2 tık = 1 dikdörtgen.
 // İki mod ayrı state — aynı tıklama dinleyicisinde karışmasın, biri açılınca diğeri kapansın diye.
-// Genişlik: sabit 340px değil — ResizeObserver ile kart clientWidth; kamera yanına eklenince
-// kart genişleyince canvas sağda boşluk bırakmasın (MapView gibi container'a uysun).
+// Canvas boyutu: kartın width×height (ResizeObserver); sığdırma contain (cover:false) —
+// harita kırpılmasın diye; kamera object-fit:cover ile bilinçli ayrılır.
 
 import React, { useEffect, useRef, useState } from 'react';
 import { Topic } from 'roslib';
@@ -17,7 +17,6 @@ import {
   displayLocalToImagePixel,
   quaternionToYaw,
   smoothPose,
-  computeRotatedCanvasHeight,
 } from '../../utils/mapCoordinates';
 
 const MAP_METADATA_URL = 'http://localhost:5000/api/map/metadata';
@@ -31,6 +30,7 @@ function canvasToWorld(canvasX, canvasY, mapMeta, imageObj, canvasWidth, canvasH
     imageSize,
     canvasWidth,
     canvasHeight,
+    { cover: false }, // contain: tıklama ile çizim tüm haritada; cover kenar kırpar
   );
   const localX = (canvasX - centerX) / fitScale;
   const localY = (canvasY - centerY) / fitScale;
@@ -206,27 +206,24 @@ export default function EngineerMiniMap({
     img.src = MAP_IMAGE_URL;
   }, []);
 
-  // Kart (wrap) clientWidth → canvas; çizim modunda kart genişleyince yeniden ölçülür
+  // Kart iç alanı (width+height) → canvas; cover ile kutuyu doldur (kamera cover hissi)
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return undefined;
 
-    const syncWidth = () => {
+    const syncSize = () => {
       const width = Math.floor(el.clientWidth);
-      if (width <= 0) return;
+      const height = Math.floor(el.clientHeight);
+      if (width <= 0 || height <= 0) return;
       setMapWidth((prev) => (prev === width ? prev : width));
+      setMapHeight((prev) => (prev === height ? prev : height));
     };
 
-    syncWidth();
-    const observer = new ResizeObserver(syncWidth);
+    syncSize();
+    const observer = new ResizeObserver(syncSize);
     observer.observe(el);
     return () => observer.disconnect();
   }, [anyDrawMode]);
-
-  useEffect(() => {
-    if (!imageObj || mapWidth <= 0) return;
-    setMapHeight(computeRotatedCanvasHeight(imageObj, mapWidth));
-  }, [imageObj, mapWidth]);
 
   useEffect(() => {
     if (!ros) return undefined;
@@ -270,7 +267,7 @@ export default function EngineerMiniMap({
 
     const ctx = canvas.getContext('2d');
     const imageSize = getImageSize(imageObj);
-    const layout = getMapFitTransform(imageSize, canvas.width, canvas.height);
+    const layout = getMapFitTransform(imageSize, canvas.width, canvas.height, { cover: false });
     const { fitScale, centerX, centerY } = layout;
     layoutRef.current = layout; // şimdilik saklanır; tıklama dönüşümü canvasToWorld ile yeniden hesaplar
 
@@ -409,7 +406,6 @@ export default function EngineerMiniMap({
     <div className="engineer-mini-map-wrap" ref={containerRef}>
       <div
         className={`engineer-mini-map${anyDrawMode ? ' engineer-mini-map--draw' : ''}`}
-        style={mapWidth > 0 && mapHeight > 0 ? { width: mapWidth, height: mapHeight } : undefined}
       >
         {loadError && (
           <p className="engineer-mini-map__error">{loadError}</p>

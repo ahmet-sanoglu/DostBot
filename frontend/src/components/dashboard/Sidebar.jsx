@@ -1,5 +1,7 @@
 // Sol dikey menü — Kontrol Paneli, Görev Geçmişi ve Mühendis Paneli arasında geçiş.
-// Görev Geçmişi: düz <a target="_blank"> — React Router Link SPA içi kalır; gerçek yeni sekme için native anchor.
+// Görev Geçmişi + Mühendis: target=_blank — yeni sekme = taze React ağacı;
+// Mühendis'te PIN kapısı her açılışta yeniden çalışsın (SPA içi kalınca oturum/PIN atlanabilirdi).
+// Görev Geçmişi ayrıca BroadcastChannel ile canlı nav state alır; Mühendis Durum kartı taşımaz.
 // Henüz tamamlanmamış öğeler (Ayarlar) devre dışı buton olarak gösterilir.
 
 import React from 'react';
@@ -15,6 +17,7 @@ const SIDEBAR_ITEMS = [
     openInNewTab: true,
   },
   { id: 'settings', icon: '⚙️', label: 'Ayarlar', path: null },
+  // Yeni sekme: PIN + veri yükleme her girişte; Kontrol ile NavigationProvider paylaşılmaz
   { id: 'engineer', icon: '🛠️', label: 'Mühendis Paneli', path: '/muhendis', openInNewTab: true },
 ];
 

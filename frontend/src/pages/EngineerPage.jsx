@@ -1,11 +1,7 @@
 // Mühendis Paneli ana sayfası — PIN korumalı görev/sınır/yasak bölge yönetimi.
-// PIN doğrulandıktan sonra harita verileri yüklenir; mini haritada geofence çizilebilir.
-// Kaydırma: .engineer-page height:100% + overflow-y:auto (App.css) — üstteki
-// .workspace__content overflow:hidden olduğu için içerik uzayınca sayfa kayamazdı;
-// sabit 100vh yerine esnek yükseklik + iç scroll ile Ayarlar kartı erişilebilir kalır.
-// Layout (engineer-page__body): sol harita+kamera | sağ blok — dashboard main-content gibi;
-// sağda Durum üstte, Görevler+Ayarlar altta yan yana — harita sürekli görünür kalsın,
-// üç eşit sütunda kartların sıkışıp kaybolmasını önlemek için.
+// Neden Durum kartı yok: yeni sekmede ayrı NavigationProvider; Kontrol'deki queueBusy
+// buraya yansımaz — yanlış "Hazır" göstermemek için durum yalnızca Kontrol'de.
+// Yerleşim: sol Harita|Kamera (eşit 16:9); sağ Görevler→Ayarlar (fit-content, 420px).
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -23,7 +19,6 @@ import {
   fetchMapForbiddenZones,
   fetchMapTasks,
 } from '../utils/mapApi';
-import StatusCard from '../components/dashboard/StatusCard';
 import CameraFeed from '../components/CameraFeed';
 import AddTaskModal from '../components/engineer/AddTaskModal';
 import BoundarySettings from '../components/engineer/BoundarySettings';
@@ -95,9 +90,6 @@ export default function EngineerPage() {
    * Toast 6 sn veya yeni bir mühendis işlemi gelince clearPendingUndo ile düşer — süre dolunca POST yapılamaz.
    */
   const pendingUndoRef = useRef(null);
-  const mapCardRef = useRef(null);
-  /** Harita kartının ölçülen dış boyutu — kamera kartına sabit px olarak kopyalanır. */
-  const [mapCardSize, setMapCardSize] = useState(null);
 
   const clearPendingUndo = useCallback(() => {
     pendingUndoRef.current = null;
@@ -131,30 +123,6 @@ export default function EngineerPage() {
       loadMapData();
     }
   }, [authenticated, loadMapData]);
-
-  // Harita kartı yüksekliği → kamera kartına (genişlik flex ile paylaşılır).
-  // Neden? Kamera haritadan kısa kalmasın / wrap ile alta düşmesin; yan yana eşit yükseklik.
-  useEffect(() => {
-    if (!authenticated) return undefined;
-    const el = mapCardRef.current;
-    if (!el) return undefined;
-
-    const syncSize = () => {
-      const width = Math.round(el.offsetWidth);
-      const height = Math.round(el.offsetHeight);
-      if (width <= 0 || height <= 0) return;
-      setMapCardSize((prev) => (
-        prev && prev.width === width && prev.height === height
-          ? prev
-          : { width, height }
-      ));
-    };
-
-    syncSize();
-    const observer = new ResizeObserver(syncSize);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [authenticated, boundaryDrawMode, forbiddenDrawMode, loading, activeMap?.id]);
 
   /** Yeni görev ekler veya düzenleme modunda mevcut görevi günceller. */
   const handleSaveTask = async (task, mode = 'create') => {
@@ -442,153 +410,139 @@ export default function EngineerPage() {
         <p className="engineer-page__error">{loadError}</p>
       )}
 
-      {/* Dış grid: sol harita|kamera yan yana; sağ Durum / Görevler|Ayarlar */}
+      {/* Sol görseller | sağ yönetim — Durum yok (yeni sekme context paylaşmaz) */}
       <div className="engineer-page__body">
-        <div className="engineer-page__visuals">
-          {/* Kart genişliği → mini harita ResizeObserver (sabit 340px yok) */}
-          <div
-            ref={mapCardRef}
-            className={`engineer-page__map panel-card${mapDrawActive ? ' engineer-page__map--draw' : ''}`}
-          >
-            <div className="panel-card__title panel-card__title--compact">
-              <span className="panel-card__icon">🗺️</span>
-              Harita
+        <div className="engineer-page__workspace">
+          <div className="engineer-page__media">
+            <div
+              className={`engineer-page__map engineer-page__media-card panel-card${mapDrawActive ? ' engineer-page__map--draw' : ''}`}
+            >
+              <div className="panel-card__title panel-card__title--compact">
+                <span className="panel-card__icon">🗺️</span>
+                Harita
+              </div>
+              <EngineerMiniMap
+                boundaryPolygon={boundaryPolygon}
+                draftVertices={boundaryDraft}
+                draftClosed={boundaryDraftClosed}
+                drawMode={boundaryDrawMode}
+                onVertexAdd={handleBoundaryVertexAdd}
+                onDrawFinish={handleFinishBoundaryDraw}
+                forbiddenZones={forbiddenZones}
+                forbiddenDrawMode={forbiddenDrawMode}
+                forbiddenCorner={forbiddenCorner}
+                forbiddenDraftRect={forbiddenPendingRect}
+                onForbiddenCornerClick={handleForbiddenCornerClick}
+              />
             </div>
-            <EngineerMiniMap
-              boundaryPolygon={boundaryPolygon}
-              draftVertices={boundaryDraft}
-              draftClosed={boundaryDraftClosed}
-              drawMode={boundaryDrawMode}
-              onVertexAdd={handleBoundaryVertexAdd}
-              onDrawFinish={handleFinishBoundaryDraw}
-              forbiddenZones={forbiddenZones}
-              forbiddenDrawMode={forbiddenDrawMode}
-              forbiddenCorner={forbiddenCorner}
-              forbiddenDraftRect={forbiddenPendingRect}
-              onForbiddenCornerClick={handleForbiddenCornerClick}
-            />
-          </div>
 
-          {/* Yükseklik haritadan; genişlik flex ile eşit paylaşılır (wrap düşmesin) */}
-          <div
-            className="engineer-page__camera panel-card"
-            style={mapCardSize ? {
-              height: mapCardSize.height,
-              maxHeight: mapCardSize.height,
-            } : undefined}
-          >
-            <div className="panel-card__title panel-card__title--compact">
-              <span className="panel-card__icon">📷</span>
-              Kamera
+            <div className="engineer-page__camera engineer-page__media-card panel-card">
+              <div className="panel-card__title panel-card__title--compact">
+                <span className="panel-card__icon">📷</span>
+                Kamera
+              </div>
+              <CameraFeed className="engineer-page__camera-feed" />
             </div>
-            <CameraFeed className="engineer-page__camera-feed" />
           </div>
         </div>
 
-        <div className="engineer-page__side">
-          <div className="engineer-page__status">
-            <StatusCard activeMap={activeMap} showMapName={false} />
-          </div>
+        <div className="engineer-page__manage">
+          <section className="engineer-list panel-card">
+            <div className="engineer-list__header">
+              <div className="panel-card__title">
+                <span className="panel-card__icon">🎯</span>
+                Görevler
+              </div>
+              <div className="engineer-list__header-actions">
+                <p className="engineer-list__hint">
+                  Koordinat adımları ve her adımda eylem tanımlayın (Bekle / Toprağı Sür).
+                </p>
+                <button
+                  type="button"
+                  className="autonomous-btn autonomous-btn--small"
+                  onClick={handleOpenCreateTaskModal}
+                >
+                  + Ekle
+                </button>
+              </div>
+            </div>
 
-          <div className="engineer-page__side-main">
-            <section className="engineer-list panel-card">
-              <div className="engineer-list__header">
-                <div className="panel-card__title">
-                  <span className="panel-card__icon">🎯</span>
-                  Görevler
-                </div>
-                <div className="engineer-list__header-actions">
-                  <p className="engineer-list__hint">
-                    Koordinat adımları ve her adımda eylem tanımlayın (Bekle / Toprağı Sür).
-                  </p>
-                  <button
-                    type="button"
-                    className="autonomous-btn autonomous-btn--small"
-                    onClick={handleOpenCreateTaskModal}
-                  >
-                    + Ekle
-                  </button>
-                </div>
-              </div>
+            {loading ? (
+              <p className="autonomous-panel__meta">Yükleniyor…</p>
+            ) : tasks.length === 0 ? (
+              <p className="autonomous-panel__meta">Henüz görev tanımlı değil.</p>
+            ) : (
+              <ul className="engineer-list__items">
+                {tasks.map((task) => (
+                  <li key={task.id} className="engineer-list__item">
+                    <div>
+                      <strong>{task.name}</strong>
+                      {task.description && (
+                        <p className="autonomous-panel__meta">{task.description}</p>
+                      )}
+                      <p className="autonomous-panel__meta">
+                        {Array.isArray(task.steps) ? task.steps.length : 0} adım
+                      </p>
+                    </div>
+                    <div className="engineer-list__item-actions">
+                      <button
+                        type="button"
+                        className="autonomous-btn autonomous-btn--ghost autonomous-btn--small"
+                        onClick={() => handleEditTask(task)}
+                      >
+                        Düzenle
+                      </button>
+                      <button
+                        type="button"
+                        className="autonomous-btn autonomous-btn--ghost autonomous-btn--small"
+                        onClick={() => requestDeleteTask(task)}
+                      >
+                        Sil
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
 
-              {loading ? (
-                <p className="autonomous-panel__meta">Yükleniyor…</p>
-              ) : tasks.length === 0 ? (
-                <p className="autonomous-panel__meta">Henüz görev tanımlı değil.</p>
-              ) : (
-                <ul className="engineer-list__items">
-                  {tasks.map((task) => (
-                    <li key={task.id} className="engineer-list__item">
-                      <div>
-                        <strong>{task.name}</strong>
-                        {task.description && (
-                          <p className="autonomous-panel__meta">{task.description}</p>
-                        )}
-                        <p className="autonomous-panel__meta">
-                          {Array.isArray(task.steps) ? task.steps.length : 0} adım
-                        </p>
-                      </div>
-                      {/* Düzenle/Sil: görev CRUD — step action'ları operatör Başlat zincirini etkiler */}
-                      <div className="engineer-list__item-actions">
-                        <button
-                          type="button"
-                          className="autonomous-btn autonomous-btn--ghost autonomous-btn--small"
-                          onClick={() => handleEditTask(task)}
-                        >
-                          Düzenle
-                        </button>
-                        <button
-                          type="button"
-                          className="autonomous-btn autonomous-btn--ghost autonomous-btn--small"
-                          onClick={() => requestDeleteTask(task)}
-                        >
-                          Sil
-                        </button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
-
-            <section className="engineer-list panel-card engineer-list--settings">
-              <div className="engineer-list__header">
-                <div className="panel-card__title">
-                  <span className="panel-card__icon">⚙️</span>
-                  Ayarlar
-                </div>
+          <section className="engineer-list panel-card engineer-list--settings">
+            <div className="engineer-list__header">
+              <div className="panel-card__title">
+                <span className="panel-card__icon">⚙️</span>
+                Ayarlar
               </div>
-              <div className="engineer-settings__section">
-                <BoundarySettings
-                  boundaryPolygon={boundaryPolygon}
-                  drawMode={boundaryDrawMode}
-                  draftVertices={boundaryDraft}
-                  draftClosed={boundaryDraftClosed}
-                  saving={boundarySaving}
-                  error={boundaryError}
-                  onStartDraw={handleStartBoundaryDraw}
-                  onFinishDraw={handleFinishBoundaryDraw}
-                  onCancelDraw={handleCancelBoundaryDraw}
-                  onSave={handleSaveBoundary}
-                  onDelete={handleDeleteBoundary}
-                />
-              </div>
-              <div className="engineer-settings__section">
-                <ForbiddenZoneSettings
-                  zones={forbiddenZones}
-                  saving={zoneSaving}
-                  error={zoneError}
-                  drawMode={forbiddenDrawMode}
-                  pendingRect={forbiddenPendingRect}
-                  onStartDraw={handleStartForbiddenDraw}
-                  onCancelDraw={handleCancelForbiddenDraw}
-                  onSavePending={handleSaveForbiddenPending}
-                  onCancelPending={handleCancelForbiddenPending}
-                  onDelete={handleDeleteForbiddenZone}
-                />
-              </div>
-            </section>
-          </div>
+            </div>
+            <div className="engineer-settings__section">
+              <BoundarySettings
+                boundaryPolygon={boundaryPolygon}
+                drawMode={boundaryDrawMode}
+                draftVertices={boundaryDraft}
+                draftClosed={boundaryDraftClosed}
+                saving={boundarySaving}
+                error={boundaryError}
+                onStartDraw={handleStartBoundaryDraw}
+                onFinishDraw={handleFinishBoundaryDraw}
+                onCancelDraw={handleCancelBoundaryDraw}
+                onSave={handleSaveBoundary}
+                onDelete={handleDeleteBoundary}
+              />
+            </div>
+            <div className="engineer-settings__section">
+              <ForbiddenZoneSettings
+                zones={forbiddenZones}
+                saving={zoneSaving}
+                error={zoneError}
+                drawMode={forbiddenDrawMode}
+                pendingRect={forbiddenPendingRect}
+                onStartDraw={handleStartForbiddenDraw}
+                onCancelDraw={handleCancelForbiddenDraw}
+                onSavePending={handleSaveForbiddenPending}
+                onCancelPending={handleCancelForbiddenPending}
+                onDelete={handleDeleteForbiddenZone}
+              />
+            </div>
+          </section>
         </div>
       </div>
 

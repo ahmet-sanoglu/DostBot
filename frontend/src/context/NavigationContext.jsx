@@ -31,7 +31,6 @@ import {
 const NAV_BUSY_MS = 10000;
 /** accepted geldiyse röle çalışıyor demektir; bundan sonra yalnızca gerçek takılma için son çare. */
 const NAV_ACCEPTED_SAFETY_MS = 120000;
-const MAX_EVENTS = 10;
 /** Geçmiş sayfasını yenileyecek terminal kayıt durumları. */
 const HISTORY_TERMINAL_STATUSES = new Set(['başarılı', 'iptal edildi', 'başarısız']);
 
@@ -42,14 +41,6 @@ const NAV_RESULT_ABORTED = 6;
 
 const NavigationContext = createContext(null);
 
-/** Son Olaylar panelinde gösterilecek saat damgasını Türkçe formatta üretir. */
-function formatEventTime(date = new Date()) {
-  return date.toLocaleTimeString('tr-TR', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
-}
 
 /** Backend task-history ISO zaman damgası (saniye hassasiyeti). */
 function historyTimestamp(date = new Date()) {
@@ -121,7 +112,6 @@ export function NavigationProvider({ children }) {
   const [lastSentGoal, setLastSentGoal] = useState(null);
   const [queueBusy, setQueueBusy] = useState(false);
   const [showBusyPopup, setShowBusyPopup] = useState(false);
-  const [recentEvents, setRecentEvents] = useState([]);
   const [activeTaskProgress, setActiveTaskProgress] = useState(null);
   const [emergencyStopped, setEmergencyStopped] = useState(false);
   const [coverageStatus, setCoverageStatus] = useState(null);
@@ -131,7 +121,7 @@ export function NavigationProvider({ children }) {
   // Kontrol Paneli kart tıklaması — haritada rota önizlemesi (navigasyon değil)
   const [previewTask, setPreviewTask] = useState(null);
   // Nav2 number_of_recoveries — engelde kurtarma manevrası sayacı.
-  // Neden UI'ye? Görev iptal edilmez ama operatör "takıldı mı?" görsün (StatusCard / Son Olaylar).
+  // Neden UI'ye? Görev iptal edilmez ama operatör "takıldı mı?" görsün (StatusCard).
   const [recoveryCount, setRecoveryCount] = useState(0);
 
   const estopResetTimerRef = useRef(null);
@@ -145,13 +135,9 @@ export function NavigationProvider({ children }) {
   const skipNextIdleEventRef = useRef(false);
   const inStepActionRef = useRef(false);  // till gibi uzun eylem sürerken nav-tamamlandı effect'ini yutar
   const queueBusyRef = useRef(false);
-  const wasConnectedRef = useRef(status === ROS_CONNECTED_STATUS);
-  const connectionInitializedRef = useRef(false);
   const pendingStepsRef = useRef([]);
   const activeTaskRef = useRef(null);
   const proceedAfterStepActionRef = useRef(null);
-  // Kurtarma uyarısı Son Olaylar'a bir kez — her feedback spam olmasın
-  const recoveryWarnedRef = useRef(false);
   // Görev geçmişi: nav state makinesine paralel yan log (await yok → UI bloklanmaz)
   const historyMapIdRef = useRef(null);
   // Çok adımlı görevde her accepted'ta "başlatıldı" yazılmasın
@@ -206,7 +192,6 @@ export function NavigationProvider({ children }) {
 
   const resetRecoveryState = useCallback(() => {
     setRecoveryCount(0);
-    recoveryWarnedRef.current = false;
   }, []);
 
   const startBusyTimer = useCallback((timeoutMs) => {
@@ -220,14 +205,6 @@ export function NavigationProvider({ children }) {
     }, timeoutMs);
   }, [clearBusyTimer]);
 
-  const addEvent = useCallback((message) => {
-    const entry = {
-      id: crypto.randomUUID(),
-      time: formatEventTime(),
-      message,
-    };
-    setRecentEvents((prev) => [entry, ...prev].slice(0, MAX_EVENTS));
-  }, []);
 
   /** Aktif görev veya son hedef etiketinden geçmiş kaydı için isim.
    *  'Hedef' = gerçek görev adı yok (fallback); logTaskHistory bu değeri yazmaz. */
@@ -370,12 +347,10 @@ export function NavigationProvider({ children }) {
 
       const sourceLabel = `Görev: ${progress.taskName} - Adım ${currentStep}/${progress.totalSteps}`;
       dispatchGoal(stepToGoal(nextStep), sourceLabel);
-      addEvent(`Adım ${currentStep}/${progress.totalSteps}: ${progress.taskName}`);
       return;
     }
 
     // Kuyruk boş → görev bitti: activeTask kilidini mutlaka düşür (yoksa startTask sonsuza meşgul kalır)
-    addEvent(`${activeTask.taskName} tamamlandı`);
     logTaskHistory('başarılı', activeTask.taskName);
     historyStartLoggedRef.current = false;
     activeTaskRef.current = null;
@@ -386,7 +361,7 @@ export function NavigationProvider({ children }) {
     // Bu idle'ı yut: activeTask zaten null; effect "Görev tamamlandı" diye tekrar yazmasın.
     // Tek atımlık — yeni görev startTask'ta false'a çekilmezse sonraki görevin ilk idle'ı da yutulur.
     skipNextIdleEventRef.current = true;
-  }, [addEvent, dispatchGoal, logTaskHistory]);
+  }, [dispatchGoal, logTaskHistory]);
 
   proceedAfterStepActionRef.current = proceedAfterStepAction;
 
@@ -425,7 +400,6 @@ export function NavigationProvider({ children }) {
           setActiveTaskProgress((prev) => (
             prev ? { ...prev, stepActionLabel: null } : prev
           ));
-          addEvent(success ? `Adım ${stepNumber}: Toprak sürme tamamlandı` : message);
           inStepActionRef.current = false;
           proceed();
         },
@@ -435,33 +409,30 @@ export function NavigationProvider({ children }) {
 
     if (actionType === 'goto_charge') {
       console.warn('[stepAction] goto_charge henüz bağlanmadı — mühendisten action/servis bilgisi bekleniyor');
-      addEvent(`Adım ${stepNumber}: Şarj İstasyonuna Git henüz aktif değil (${taskName})`);
       proceed();
       return;
     }
 
     if (actionType === 'goto_base') {
       console.warn('[stepAction] goto_base henüz bağlanmadı — base konumu koordinatı bekleniyor');
-      addEvent(`Adım ${stepNumber}: Base Konuma Git henüz aktif değil (${taskName})`);
       proceed();
       return;
     }
 
     proceed();
-  }, [addEvent, ros]);
+  }, [ros]);
 
   /** Nav hedefi tamamlandı (röle result) — az önce varılan noktanın eylemini tetikler. */
   const handleNavigationArrived = useCallback(() => {
     const activeTask = activeTaskRef.current;
     if (!activeTask) {
-      addEvent('Görev tamamlandı');
       return;
     }
 
     const step = activeTask.steps?.[activeTask.currentStep - 1];
     const actionType = step?.action?.type || 'wait';
     runStepAction(actionType, activeTask.currentStep, activeTask.taskName);
-  }, [addEvent, runStepAction]);
+  }, [runStepAction]);
 
   /**
    * Yalnızca kullanıcı yeni görev/hedef başlatırken çağrılır.
@@ -501,11 +472,8 @@ export function NavigationProvider({ children }) {
     historyStartLoggedRef.current = false;
 
     const sent = dispatchGoal(goal, sourceLabel);
-    if (sent) {
-      addEvent(sourceLabel || 'Hedefe gidiyor');
-    }
     return sent;
-  }, [addEvent, clearStaleActiveTaskIfIdle, dispatchGoal, queueBusy]);
+  }, [clearStaleActiveTaskIfIdle, dispatchGoal, queueBusy]);
 
   const startTask = useCallback((task) => {
     // Kritik sıfırlama: önceki görevin (ör. "Base'e Git") bitişinde true kalan skipNextIdleEvent,
@@ -545,15 +513,13 @@ export function NavigationProvider({ children }) {
       : `Görev: ${progress.taskName} - Adım 1/${steps.length}`;
 
     const sent = dispatchGoal(stepToGoal(steps[0]), sourceLabel);
-    if (sent) {
-      addEvent(`${progress.taskName} başlatıldı`);
-    } else {
+    if (!sent) {
       activeTaskRef.current = null;
       setActiveTaskProgress(null);
       pendingStepsRef.current = [];
     }
     return sent;
-  }, [addEvent, clearStaleActiveTaskIfIdle, dispatchGoal, queueBusy]);
+  }, [clearStaleActiveTaskIfIdle, dispatchGoal, queueBusy]);
 
   // /agrifleet/nav_status — tek güvenilir kaynak (nav_relay); status_list / ID tahmini yok
   useEffect(() => {
@@ -582,12 +548,6 @@ export function NavigationProvider({ children }) {
         if (typeof message.number_of_recoveries === 'number') {
           const count = message.number_of_recoveries;
           setRecoveryCount(count);
-          // ≥2: Nav2 ciddi engel/kurtarma — görev devam eder, sadece uyarı
-          // recoveryWarnedRef: aynı görevde tekrarlayan feedback spam'ini keser
-          if (count >= 2 && !recoveryWarnedRef.current) {
-            recoveryWarnedRef.current = true;
-            addEvent('⚠️ Robot zorlanıyor, alternatif yol deneniyor');
-          }
         }
         return;
       }
@@ -603,7 +563,6 @@ export function NavigationProvider({ children }) {
         setActiveTaskProgress(null);
         skipNextIdleEventRef.current = true; // rejected sonrası idle "tamamlandı" spam'i olmasın
         historyStartLoggedRef.current = false;
-        addEvent('Hedef reddedildi');
         logTaskHistory('başarısız', rejectedName);
         setQueueBusy(false);
         return;
@@ -646,7 +605,6 @@ export function NavigationProvider({ children }) {
       }
     });
   }, [
-    addEvent,
     clearBusyTimer,
     isConnected,
     logTaskHistory,
@@ -674,7 +632,6 @@ export function NavigationProvider({ children }) {
       if (estopTriggeredRef.current) {
         estopTriggeredRef.current = false;
         clearPlanPath();
-        addEvent('Acil dur — navigasyon durduruldu');
         wasBusyRef.current = queueBusy;
         return;
       }
@@ -683,28 +640,11 @@ export function NavigationProvider({ children }) {
 
       if (activeTaskRef.current) {
         handleNavigationArrived();
-      } else {
-        addEvent('Görev tamamlandı');
       }
     }
 
     wasBusyRef.current = queueBusy;
-  }, [addEvent, clearPlanPath, handleNavigationArrived, queueBusy]);
-
-  useEffect(() => {
-    if (!connectionInitializedRef.current) {
-      connectionInitializedRef.current = true;
-      wasConnectedRef.current = isConnected;
-      return;
-    }
-
-    if (wasConnectedRef.current && !isConnected) {
-      addEvent('Bağlantı kesildi');
-    } else if (!wasConnectedRef.current && isConnected) {
-      addEvent('Bağlantı geri geldi');
-    }
-    wasConnectedRef.current = isConnected;
-  }, [addEvent, isConnected]);
+  }, [clearPlanPath, handleNavigationArrived, queueBusy]);
 
   useEffect(() => () => {
     clearBusyTimer();
@@ -752,7 +692,6 @@ export function NavigationProvider({ children }) {
       previewTask,
       setPreviewTask,
       recoveryCount,
-      recentEvents,
       statusText,
       isConnected,
     }),
@@ -769,7 +708,6 @@ export function NavigationProvider({ children }) {
       mapTrailResetKey,
       previewTask,
       recoveryCount,
-      recentEvents,
       statusText,
       isConnected,
     ],

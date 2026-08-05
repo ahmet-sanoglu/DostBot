@@ -2,7 +2,8 @@
 // Neden ayrı bileşen? Kontrol + mühendis paneli aynı fallback'i paylaşsın.
 // onError: 503/bağlantı yok → fallback kutu; src='' ile tarayıcı yeniden denemesin.
 // image_relay.py kaldırıldı (donma); sim için web_video_server :8080 kullanılıyor.
-// onFrameAspect: ilk kare naturalWidth/Height → parent aspect-ratio (siyah bar azaltma).
+// onFrameAspect: naturalWidth/Height → parent --camera-ar (siyah bar azaltma).
+// MJPEG'de onLoad bazen 0x0 gelir — boyut gelene kadar kısa poll.
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchCameraMode } from '../utils/mapApi';
@@ -28,22 +29,24 @@ export const CAMERA_DEFAULT_ASPECT = 16 / 9;
 export default function CameraFeed({ className = '', imgClassName = '', onFrameAspect }) {
   const [streamUrl, setStreamUrl] = useState(null);
   const [failed, setFailed] = useState(false);
+  const imgRef = useRef(null);
   const lastAspectRef = useRef(null);
   const onFrameAspectRef = useRef(onFrameAspect);
   onFrameAspectRef.current = onFrameAspect;
 
   const reportAspect = useCallback((img) => {
-    if (!img) return;
+    if (!img) return false;
     const width = img.naturalWidth;
     const height = img.naturalHeight;
-    if (!(width > 0 && height > 0)) return;
+    if (!(width > 0 && height > 0)) return false;
     const aspect = width / height;
     // Aynı oranı tekrar bildirme (MJPEG yeniden decode gürültüsü)
     if (lastAspectRef.current != null && Math.abs(lastAspectRef.current - aspect) < 0.001) {
-      return;
+      return true;
     }
     lastAspectRef.current = aspect;
     onFrameAspectRef.current?.({ aspect, width, height });
+    return true;
   }, []);
 
   useEffect(() => {
@@ -69,6 +72,19 @@ export default function CameraFeed({ className = '', imgClassName = '', onFrameA
     };
   }, []);
 
+  // MJPEG: onLoad boyut vermezse birkaç sn poll — --camera-ar güncellensin
+  useEffect(() => {
+    if (!streamUrl || failed) return undefined;
+    let tries = 0;
+    const id = window.setInterval(() => {
+      tries += 1;
+      if (reportAspect(imgRef.current) || tries >= 40) {
+        window.clearInterval(id);
+      }
+    }, 250);
+    return () => window.clearInterval(id);
+  }, [streamUrl, failed, reportAspect]);
+
   // Hata sonrası <img> unmount — yeni istek döngüsü oluşmasın
   if (failed) {
     return (
@@ -88,6 +104,7 @@ export default function CameraFeed({ className = '', imgClassName = '', onFrameA
   return (
     <div className={`camera-feed ${className}`.trim()}>
       <img
+        ref={imgRef}
         src={streamUrl}
         alt="Kamera akışı"
         className={`camera-feed__img ${imgClassName}`.trim()}

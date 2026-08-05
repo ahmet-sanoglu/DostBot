@@ -1,7 +1,6 @@
-// Operatör panelinin sağ sütunu: durum, joystick, görev listesi ve son olaylar kartlarını bir araya getirir.
+// Operatör panelinin sağ sütunu: durum, joystick ve görev listesi kartlarını bir araya getirir.
 // CSS'te .control-panel overflow-y: auto ile kaydırılabilir — kartlar ekranı aşınca
-// "Son Olaylar" görünür alanın dışında kalmasın diye (sayfa değil, panel içi scroll).
-// Görev listesi max-height + iç scroll ile joystick'i aşağı itmez.
+// panel içi scroll (sayfa değil). Görev listesi max-height + iç scroll ile joystick'i aşağı itmez.
 // Pin: sık kullanılan görevler scroll içinde kaybolmasın diye üstte tutulur;
 // sıralama stabil (pinned önce, grup içi mevcut sıra) — her tıkta liste zıplamasın.
 // PUT ile tasks.json'a yazılır; ayrı favori store yok (harita değişince pin kaybolmasın).
@@ -11,7 +10,6 @@ import { useNavigation } from '../../context/NavigationContext';
 import { INVALID_GOAL_MESSAGE } from '../../utils/mapPassability';
 import { updateMapTask } from '../../utils/mapApi';
 import Joystick from '../Joystick';
-import RecentEventsPanel from './RecentEventsPanel';
 import StatusCard from './StatusCard';
 
 /** Görev adım sayısını operatör dostu metne çevirir. */
@@ -243,10 +241,6 @@ export default function ControlPanel({
             })}
           </ul>
         )}
-      </div>
-
-      <div className="panel-card panel-card--events">
-        <RecentEventsPanel />
       </div>
 
       {showBusyPopup && (

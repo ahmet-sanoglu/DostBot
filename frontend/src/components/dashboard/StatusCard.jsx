@@ -1,5 +1,6 @@
 // Robot durum kartı: bağlantı, meşgul/hazır rozeti, görev ilerlemesi ve son hedef bilgisi.
-// NavigationContext'ten okur; operatör ve mühendis panelinde ortak kullanılır.
+// NavigationContext'ten okur — yalnızca Kontrol Paneli'nde gösterilir (Mühendis'te ayrı
+// örnek açılınca state paylaşılmadığı için orada kart yok; canlı durum tek yerde kalsın).
 
 import React from 'react';
 import { useNavigation } from '../../context/NavigationContext';
