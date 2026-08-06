@@ -1,7 +1,7 @@
 // Mühendis Paneli ana sayfası — PIN korumalı görev/sınır/yasak bölge yönetimi.
 // Neden Durum kartı yok: yeni sekmede ayrı NavigationProvider; Kontrol'deki queueBusy
 // buraya yansımaz — yanlış "Hazır" göstermemek için durum yalnızca Kontrol'de.
-// Yerleşim: sol Harita|Kamera (eşit 16:9); sağ Görevler→Ayarlar (fit-content, 420px).
+// Yerleşim: sol Kamera→Harita; sağ Görevler|Ayarlar (boyutlar sabit, yalnız konum).
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -410,10 +410,18 @@ export default function EngineerPage() {
         <p className="engineer-page__error">{loadError}</p>
       )}
 
-      {/* Sol görseller | sağ yönetim — Durum yok (yeni sekme context paylaşmaz) */}
+      {/* Sol: Kamera→Harita (dikey). Sağ: Görevler|Ayarlar (yan yana). Boyut kuralları aynı. */}
       <div className="engineer-page__body">
         <div className="engineer-page__workspace">
           <div className="engineer-page__media">
+            <div className="engineer-page__camera engineer-page__media-card panel-card">
+              <div className="panel-card__title panel-card__title--compact">
+                <span className="panel-card__icon">📷</span>
+                Kamera
+              </div>
+              <CameraFeed className="engineer-page__camera-feed" />
+            </div>
+
             <div
               className={`engineer-page__map engineer-page__media-card panel-card${mapDrawActive ? ' engineer-page__map--draw' : ''}`}
             >
@@ -434,14 +442,6 @@ export default function EngineerPage() {
                 forbiddenDraftRect={forbiddenPendingRect}
                 onForbiddenCornerClick={handleForbiddenCornerClick}
               />
-            </div>
-
-            <div className="engineer-page__camera engineer-page__media-card panel-card">
-              <div className="panel-card__title panel-card__title--compact">
-                <span className="panel-card__icon">📷</span>
-                Kamera
-              </div>
-              <CameraFeed className="engineer-page__camera-feed" />
             </div>
           </div>
         </div>
