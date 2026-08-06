@@ -1,4 +1,4 @@
-"""AgriFleet Nav2 rölesi.
+"""DostBot Nav2 rölesi.
 
 rosbridge ROS 2 action protokolünü (özellikle feedback/result/cancel akışını) güvenilir
 taşımadığı için UI doğrudan ActionClient kullanmaz. Bunun yerine bu native Python node,

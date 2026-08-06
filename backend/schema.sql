@@ -1,4 +1,4 @@
--- AgriFleet PostgreSQL şeması — JSON dosya deposunun yerine geçer.
+-- DostBot PostgreSQL şeması — JSON dosya deposunun yerine geçer.
 -- Neden SQL? Eşzamanlı yazım, atomik güncelleme ve harita silince ilişkili verinin
 -- CASCADE ile temizlenmesi; dosya kilit / yarım yazım riski yok.
 -- API camelCase döner; sütunlar snake_case (SQL geleneği) — çeviri app.py'de.

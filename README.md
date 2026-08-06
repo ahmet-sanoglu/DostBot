@@ -1,4 +1,4 @@
-# AgriFleet
+# DostBot
 
 Dost Tarim Teknolojileri bunyesinde gelistirilen, serada calisan otonom/manuel kontrol edilebilir bir AGV icin web tabanli kontrol paneli.
 

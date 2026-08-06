@@ -2,8 +2,8 @@
 // Neden BroadcastChannel? History target=_blank ile ayrı React ağacı açar;
 // NavigationContext state paylaşılmaz — canlı görev + geçmiş yenileme buradan geçer.
 
-const CHANNEL_NAME = 'agrifleet-navigation';
-const SNAPSHOT_KEY = 'agrifleet:nav-snapshot';
+const CHANNEL_NAME = 'dostbot-navigation';
+const SNAPSHOT_KEY = 'dostbot:nav-snapshot';
 
 let channel = null;
 
@@ -54,14 +54,14 @@ export function publishTaskHistoryUpdated(detail) {
   try {
     // storage event: diğer sekmeler (BroadcastChannel yoksa yedek)
     localStorage.setItem(
-      'agrifleet:task-history-tick',
+      'dostbot:task-history-tick',
       String(Date.now()),
     );
   } catch {
     // ignore
   }
   // Aynı sekme: BroadcastChannel gönderene gitmez
-  window.dispatchEvent(new CustomEvent('agrifleet:task-history-updated', { detail: payload }));
+  window.dispatchEvent(new CustomEvent('dostbot:task-history-updated', { detail: payload }));
 }
 
 /**
@@ -83,7 +83,7 @@ export function subscribeNavigationBroadcast(handler) {
         // ignore
       }
     }
-    if (event.key === 'agrifleet:task-history-tick' && event.newValue) {
+    if (event.key === 'dostbot:task-history-tick' && event.newValue) {
       handler({ type: 'task-history-updated' });
     }
   };
@@ -92,11 +92,11 @@ export function subscribeNavigationBroadcast(handler) {
   const onLocal = (event) => {
     if (event?.detail) handler(event.detail);
   };
-  window.addEventListener('agrifleet:task-history-updated', onLocal);
+  window.addEventListener('dostbot:task-history-updated', onLocal);
 
   return () => {
     ch?.removeEventListener('message', onMessage);
     window.removeEventListener('storage', onStorage);
-    window.removeEventListener('agrifleet:task-history-updated', onLocal);
+    window.removeEventListener('dostbot:task-history-updated', onLocal);
   };
 }

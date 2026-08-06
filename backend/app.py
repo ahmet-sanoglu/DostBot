@@ -1,4 +1,4 @@
-# AgriFleet web arayüzünün veri katmanı.
+# DostBot web arayüzünün veri katmanı.
 # Robotla doğrudan konuşmaz; harita görüntüsü diskten, görev/sınır/yasak bölge
 # PostgreSQL'den okunur/yazılır. Flask bu dosyayı "REST API sunucusu" olarak çalıştırır.
 #
