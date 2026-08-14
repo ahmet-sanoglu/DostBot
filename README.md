@@ -1,121 +1,140 @@
 # DostBot
 
-Dost Tarim Teknolojileri bunyesinde gelistirilen, serada calisan otonom/manuel kontrol edilebilir bir AGV icin web tabanli kontrol paneli.
+Web tabanlı tarım robotu kontrol sistemi. Sera içinde çalışan bir tarım robotunu, tarayıcıdan (herhangi bir teknik bilgiye gerek kalmadan) kontrol etmeyi sağlar.
 
-## Mimari
+## Teknoloji Yığını
 
-Robot / ROS 2 -> rosbridge (WebSocket :9090) -> React Frontend -> MapView / Joystick / Gorevler
-                 -> nav_relay.py (NavigateToPose ActionClient) <-> /agrifleet/nav_*
-Flask Backend :5000 -> harita gorseli + metadata + gorev/harita verisi (JSON)
+- **ROS 2 (Jazzy)** — robotun çalıştığı sistem
+- **React** — web arayüzü (frontend)
+- **Flask (Python)** — arka plan sunucusu (backend)
+- **PostgreSQL** — veritabanı
+- **rosbridge** — ROS 2 ile web tarayıcısı arasındaki köprü
 
-Teknoloji yigini:
-- Frontend: React + Vite, react-router-dom, roslibjs, nipplejs, recharts
-- Backend: Flask, flask-cors, Pillow
-- ROS 2 Jazzy, rosbridge_suite, Nav2 (navigate_to_pose); UI action yerine nav_relay topic'leri kullanir
+## Sistem Mimarisi
 
-## Klasor Yapisi
+```
+[Robot / ROS 2] → rosbridge (WebSocket :9090) → React Frontend (:5173)
+                                                        ↕
+                                                Flask Backend (:5000)
+                                                        ↕
+                                                  PostgreSQL
+```
 
-- backend/app.py (Flask API)
-- backend/convert_map.py (PGM -> PNG donusumu)
-- backend/.env (MAP_DIRECTORY, ADMIN_PIN, git'e dahil degil)
-- backend/data/maps.json (harita kayit defteri)
-- backend/data/map_id/ (tasks.json, forbidden_zones.json, boundary.json)
-- frontend/src/pages/DashboardPage.jsx (Operator - Kontrol Paneli, /)
-- frontend/src/pages/EngineerPage.jsx (Muhendis Paneli, /muhendis)
-- frontend/src/components/dashboard/ (Operator bilesenleri)
-- frontend/src/components/engineer/ (Muhendis paneli bilesenleri)
-- agriculture_map1/ (statik harita dosyalari)
-- extract_bag_map.py (bag'den canli harita cikarma scripti)
-- ros_nodes/nav_relay.py (Nav2 ActionClient role; UI <-> /agrifleet/nav_command|nav_status)
+## İki Panel
 
-## Iki Panel
-
-Kontrol Paneli (/) - Operator arayuzu. Harita, joystick, onceden tanimlanmis gorevleri baslatma. Ham koordinat girisi yok.
-
-Muhendis Paneli (/muhendis) - Gorev tanimlama, harita secimi, gecilebilir alan siniri cizme. Basit PIN korumasi var, gercek kimlik dogrulama degil.
-
-## Guvenlik Katmanlari
-
-1. Harita piksel kontrolu
-2. Gecilebilir alan poligonu (boundary.json)
-3. Yasakli dikdortgen bolgeler (planlandi, henuz aktif degil)
+- **Kontrol Paneli** (`/`) — operatör ekranı. Görev başlatma, izleme, Acil Dur, kamera görüntüsü, harita.
+- **Mühendis Paneli** (`/muhendis`) — PIN korumalı. Harita ekleme, görev tanımlama, güvenlik sınırları çizme.
 
 ## Kurulum
 
-### Hizli kurulum (tek komut)
+### 1. Sistem paketleri
 
 ```bash
-chmod +x setup.sh
-./setup.sh
+# ROS 2 Jazzy
+sudo apt install curl gnupg lsb-release -y
+sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list > /dev/null
+sudo apt update
+sudo apt install ros-jazzy-desktop python3-colcon-common-extensions python3-rosdep -y
+sudo rosdep init
+rosdep update
+echo 'source /opt/ros/jazzy/setup.bash' >> ~/.bashrc
+
+# Node.js
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt install nodejs -y
+
+# PostgreSQL
+sudo apt install postgresql postgresql-contrib -y
+
+# Python temel araçlar
+sudo apt install python3-pip python3-venv build-essential -y
 ```
 
-Bundan sonra elle yapman gerekenler:
-
-1. `backend/.env` dosyasini olustur (`MAP_DIRECTORY`, `ADMIN_PIN`) — yedekten kopyala
-2. `agriculture_map1/` klasorunu yedekten geri getir
-3. `bag_examples_for_ui/` klasorunu yedekten geri getir
-4. GitHub icin SSH anahtari olustur (`ssh-keygen`) ve GitHub hesabina ekle
-
-### Calistirma
-
-Backend: cd backend, source ../venv/bin/activate, python3 app.py
-Frontend: cd frontend, npm run dev
-ROS koprusu: ros2 launch rosbridge_server rosbridge_websocket_launch.xml
-
-Nav role (rosbridge yaninda zorunlu — action feedback/result UI'ya topic ile gelir):
+### 2. PostgreSQL veritabanı kurulumu
 
 ```bash
-source /opt/ros/jazzy/setup.bash
-python3 ros_nodes/nav_relay.py
+sudo -u postgres psql -c "CREATE DATABASE dostbot;"
+sudo -u postgres psql -c "CREATE USER dostbot_user WITH PASSWORD 'sifre_belirle';"
+sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE dostbot TO dostbot_user;"
+sudo -u postgres psql -d dostbot -c "GRANT ALL ON SCHEMA public TO dostbot_user;"
+sudo -u postgres psql -d dostbot -c "GRANT CREATE ON SCHEMA public TO dostbot_user;"
+
+cd backend
+psql -h localhost -U dostbot_user -d dostbot -f schema.sql
 ```
 
-## TurtleBot3 Simulasyon Test Sureci
+### 3. Backend kurulumu
 
-Asagidaki sira kritiktir. SLAM ile haritalama bittikten sonra **SLAM kapatilip** lokalizasyon (`map_server` + **AMCL**) baslatilmali; aksi halde Nav2 robotun haritadaki yerini bilmez / `/map` alamaz ve hedefler **ABORTED (status 6)** ile reddedilir.
+```bash
+cd backend
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
 
-### Hizli baslatma (onerilen)
+### 4. Frontend kurulumu
 
-Tum terminalleri dogru sirayla acmak icin:
+```bash
+cd frontend
+npm install
+```
+
+### 5. `.env` dosyası
+
+`backend/.env` dosyasını oluştur:
+
+```
+MAP_DIRECTORY=/home/KULLANICI_ADIN/AgriFleet/agriculture_map1
+ADMIN_PIN=1234
+CAMERA_RTSP_URL=rtsp://kullanici:sifre@ip:554/yol
+CAMERA_MODE=sim
+DATABASE_URL=postgresql://dostbot_user:sifre_belirle@localhost:5432/dostbot
+```
+
+- `CAMERA_MODE`: `sim` (simülasyon kamerası) veya `real` (gerçek RTSP kamera)
+- `ADMIN_PIN`: Mühendis Paneli'ne giriş şifresi — gerçek bir kimlik doğrulama değil, kaza önleyici basit bir katman
+
+### 6. Mevcut JSON verisi varsa, veritabanına aktar (tek seferlik)
+
+```bash
+python3 migrate_json_to_postgres.py
+```
+
+## Simülasyon Testi (TurtleBot3 + Gazebo)
+
+Tüm sistemi tek komutla ayağa kaldıran script:
 
 ```bash
 ~/start_agrifleet_sim.sh
 ```
 
-Script Gazebo, lokalizasyon, Nav2, rosbridge, nav_relay, backend ve frontend'i ayri terminallerde otomatik acar. Elle adim adim kurulum asagidadir.
+Bu script sırayla: Gazebo, rosbridge, **AMCL tabanlı lokalizasyon** (`localization_launch.py` — sadece `map_server` DEĞİL, çünkü tek başına `map_server` kullanmak `map`→`odom` TF bağlantısını sağlamaz ve tüm navigasyon hedefleri reddedilir), Nav2, nav_relay, cmd_vel_relay, odom_relay, backend ve frontend'i başlatır.
 
-### Elle adim adim
+Elle başlatmak istersen, script'in içeriğine bakarak adımları sırayla çalıştırabilirsin.
 
-1. **Gazebo** — TurtleBot3 simulasyonunu baslat (ornek: `turtlebot3_gazebo` world).
-2. **SLAM ile haritalama** — Ortami gezerek haritayi olustur; bitince haritayi diske kaydet (`map.yaml` + `map.pgm`/`map.png`).
-3. **SLAM'i kapat** — Haritalama bittiyse SLAM dugumunu durdur. Ayni anda hem SLAM hem map_server `/map` yayinlamamali.
-4. **Lokalizasyon (map_server + AMCL)** — Kaydedilen haritayi `nav2_bringup` `localization_launch.py` ile yukle (yalnizca map_server degil; AMCL birlikte gelir):
+### Doğrulama
 
 ```bash
-ros2 launch nav2_bringup localization_launch.py \
-  map:=<harita_yolu>/map.yaml \
-  use_sim_time:=True
+ros2 action info /navigate_to_pose   # "Action servers: 1" olmalı
+ros2 node list | grep nav_relay       # görünmeli
 ```
 
-`<harita_yolu>` ornegi: `/home/ahmet/AgriFleet/turtlebot3_sim_map`
+## Proje Yapısı
 
-5. **Baslangic pozu (`/initialpose`)** — AMCL robotun haritadaki yerini bilmeden Nav2 hedef kabul etmez. RViz'de **2D Pose Estimate** ile robotun yaklasik konum/yonunu verin; veya `/initialpose` topic'ine `geometry_msgs/PoseWithCovarianceStamped` yayinlayin. Laser tarama harita duvarlariyla cakisiyorsa poz yeterince iyidir.
-6. **Nav2** — Navigasyon stack'ini baslat (`use_sim_time:=True` ile). Costmap `/map`'i lokalizasyondan bekler.
-7. **rosbridge** — `ros2 launch rosbridge_server rosbridge_websocket_launch.xml`
-8. **nav_relay** — `python3 ros_nodes/nav_relay.py` (NavigateToPose ActionClient; UI topic'leri)
-9. **Backend / Frontend** — Flask `:5000`, Vite `npm run dev` (`:5173`). Muhendis panelinden ilgili `imageDir` haritasini ekle/aktive et.
+```
+backend/          → Flask sunucusu, PostgreSQL erişimi, schema.sql
+frontend/          → React uygulaması (Kontrol Paneli + Mühendis Paneli)
+ros_nodes/          → nav_relay.py (rosbridge'in desteklemediği Nav2 action feedback'ini taşıyan köprü node'u)
+```
 
-### Uyari: SLAM sonrasi lokalizasyon zorunlu
+## Neden Kendi `nav_relay.py` Yazıldı
 
-SLAM ile haritalama bittikten sonra SLAM kapatilip **`localization_launch.py`** (map_server + AMCL) baslatilmali; ardindan **`/initialpose`** verilmeli.
+`rosbridge_suite`, ROS 2 action protokolünü (goal/feedback/result) tam desteklemiyor — bu, aracın bilinen bir sınırlaması. Bu yüzden Nav2 ile native olarak (rclpy üzerinden) konuşan, sonucu basit ROS topic'lerine ("/agrifleet/nav_command", "/agrifleet/nav_status") çeviren bir röle node'u yazıldı.
 
-- SLAM acik kalirsa veya lokalizasyon hic baslamazsa Nav2 costmap / poz tahmini guvenilir olmaz.
-- `initialpose` verilmezse AMCL baslatilmaz; hedefler reddedilir veya sapar.
-- Sonuc: planlama basarisiz, hedefler **ABORTED (status 6)**; UI'da gorevler de reddedilir / tamamlanmaz.
-- Web paneli harita PNG'sini Flask'tan gosterir; bu, Nav2'nin `/map`'ini **yerine gecmez**.
+## Bilinen Sınırlamalar / Bekleyen İşler
 
-Eski yaklasim (yalnizca `ros2 run nav2_map_server map_server` + lifecycle) yeterli degildir — AMCL ve `/initialpose` olmadan lokalizasyon tamamlanmaz. Tercih edilen yol: `localization_launch.py`.
-
-## Acik Isler
-
-- Nav2 parametre paneli planlandi, uygulanmadi
-- Tum testler bag / simulasyon ile yapildi, gercek robot testi bekliyor
+- Batarya göstergesi henüz gerçek ROS verisine bağlanmadı (sabit/demo değer gösteriyor)
+- Şarj istasyonuna gitme özelliği, mühendisten servis/action bilgisi bekliyor (`goto_charge` şu an placeholder)
+- Çoklu robot desteği yok, tek robot için tasarlandı
+- Saha koşullarında (uzun mesafe, bağlantı kesintisi) kapsamlı test henüz yapılmadı
