@@ -85,11 +85,12 @@ npm install
 `backend/.env` dosyasını oluştur:
 
 ```
-MAP_DIRECTORY=/home/KULLANICI_ADIN/AgriFleet/agriculture_map1
-ADMIN_PIN=1234
-CAMERA_RTSP_URL=rtsp://kullanici:sifre@ip:554/yol
-CAMERA_MODE=sim
-DATABASE_URL=postgresql://dostbot_user:sifre_belirle@localhost:5432/dostbot
+# Örnek .env Yapılandırması
+MAP_DIRECTORY=/path/to/your/map_directory
+ADMIN_PIN=your_secure_pin_here
+CAMERA_RTSP_URL=rtsp://username:password@ip_address:port/stream_path
+CAMERA_MODE=sim # 'sim' veya 'real' olarak ayarlayın
+DATABASE_URL=postgresql://username:password@localhost:5432/database_name
 ```
 
 - `CAMERA_MODE`: `sim` (simülasyon kamerası) veya `real` (gerçek RTSP kamera)
